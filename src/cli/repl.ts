@@ -166,9 +166,6 @@ export class REPL {
           trimmedLength: userInput.length,
           preview: userInput.slice(0, 80),
         });
-        if (userInput) {
-          console.error(chalk.green.bold('rookie ') + chalk.cyan.bold('❯ ') + userInput);
-        }
       } catch (err: any) {
         if (err.name === 'ExitPromptError') {
           console.error(chalk.gray('\nBye!'));

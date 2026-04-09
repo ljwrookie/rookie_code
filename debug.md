@@ -26,4 +26,8 @@ Status: [OPEN]
 ## Analysis
 - 已基本排除 “Renderer 没输出” 作为首因。
 - 当前最可能根因是 `createPrompt` 的回车分支使用 `readline.line` 取值时拿到了被清空的 buffer，而非用户已输入内容。
-- 次要体验问题是 prompt 完成后没有重新回显用户输入，视觉上更像“输入被吞掉”。
+- 次要体验问题并不是“缺少回显”，而是修复后额外增加的 `console.error(...)` 手动回显与 `createPrompt` 自带的最终渲染叠加，导致每次输入显示两次。
+
+## Fix
+- 保留回车时提交 `value || readline.line` 的修复。
+- 删除 prompt 返回后的手动 `console.error(...)` 回显，只让 `createPrompt` 自己负责显示最终输入。
