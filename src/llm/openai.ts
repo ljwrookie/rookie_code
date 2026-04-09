@@ -186,7 +186,8 @@ export class OpenAIProvider implements LLMProvider {
     if (!apiKey) {
       throw new LLMError('OPENAI_API_KEY is required.', 'AUTH', false);
     }
-    this.client = new OpenAI({ apiKey, baseURL });
+    // OpenAI client ignores baseURL if it is undefined, but if passed empty string it might error
+    this.client = new OpenAI(baseURL ? { apiKey, baseURL } : { apiKey });
     this.model = model ?? 'gpt-4o';
   }
 
