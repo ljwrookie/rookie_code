@@ -59,7 +59,7 @@ export class REPL {
       }
     });
 
-    rl.setPrompt(chalk.bold.green('> '));
+    rl.setPrompt(chalk.green.bold('rookie ') + chalk.cyan.bold('❯ '));
 
     while (true) {
       rl.prompt();
@@ -89,7 +89,7 @@ export class REPL {
       while (fullInput.endsWith('\\')) {
         fullInput = fullInput.slice(0, -1) + '\n';
         try {
-          const continuation = await rl.question(chalk.gray('... '));
+          const continuation = await rl.question(chalk.cyan.bold('       ❯ '));
           fullInput += continuation;
         } catch {
           break;

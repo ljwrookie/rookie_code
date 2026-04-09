@@ -29,8 +29,8 @@ export class Renderer {
     this.endStream();
     const inputSummary = this.summarizeInput(input);
     console.error(
-      chalk.cyan('  ⚡ ') +
-      chalk.cyan.bold(name) +
+      chalk.yellow('  ⚙  ') +
+      chalk.yellow.bold(name) +
       chalk.gray(` ${inputSummary}`),
     );
   }
@@ -39,7 +39,7 @@ export class Renderer {
   renderToolResult(name: string, result: ToolResult): void {
     if (result.is_error) {
       console.error(
-        chalk.red('  ✖ ') +
+        chalk.red('  ✖  ') +
         chalk.red(name) +
         chalk.gray(': ') +
         chalk.red(this.truncateForDisplay(result.content, 200)),
@@ -47,7 +47,7 @@ export class Renderer {
     } else {
       const preview = this.truncateForDisplay(result.content, 150);
       console.error(
-        chalk.green('  ✔ ') +
+        chalk.green('  ✔  ') +
         chalk.green(name) +
         chalk.gray(': ') +
         chalk.gray(preview),
@@ -58,13 +58,26 @@ export class Renderer {
   /** Render an error */
   renderError(error: Error): void {
     this.endStream();
-    console.error(chalk.red('\n✖ Error: ') + error.message);
+    console.error(chalk.red('\n  ✖  Error: ') + error.message);
   }
 
   /** Render welcome message */
   renderWelcome(): void {
-    console.error(chalk.bold('\n🤖 rookie-code v0.1.0'));
-    console.error(chalk.gray('  Type your request, or /exit to quit.\n'));
+    const logo = `
+  ____              _    _          ____          _      
+ |  _ \\ ___   ___ | | _(_) ___    / ___|___   __| | ___ 
+ | |_) / _ \\ / _ \\| |/ / |/ _ \\  | |   / _ \\ / _\` |/ _ \\
+ |  _ < (_) | (_) |   <| |  __/  | |__| (_) | (_| |  __/
+ |_| \\_\\___/ \\___/|_|\\_\\_|\\___|   \\____\\___/ \\__,_|\\___|
+`;
+    console.error(chalk.cyan.bold(logo));
+    console.error(chalk.white.bold('  Welcome to Rookie Code v0.1.0 🤖\n'));
+
+    console.error(chalk.gray('  💡 Tips:'));
+    console.error(chalk.gray('  • Type your request and press ') + chalk.white('Enter') + chalk.gray(' to execute.'));
+    console.error(chalk.gray('  • Use ') + chalk.white('\\') + chalk.gray(' at the end of a line for multi-line input.'));
+    console.error(chalk.gray('  • Type ') + chalk.white('/help') + chalk.gray(' to see available commands (e.g., /undo, /clear).'));
+    console.error(chalk.gray('  • Type ') + chalk.white('/exit') + chalk.gray(' to quit the application.\n'));
   }
 
   /** Handle an agent event */
