@@ -91,25 +91,32 @@ export class AgentLoop {
       }
 
       // Execute tools and collect results
-      const toolResults: ContentBlock[] = [];
-      for (const toolUse of toolUseBlocks) {
+      const toolResultsPromises = toolUseBlocks.map(async (toolUse) => {
         if (signal?.aborted) {
           throw new DOMException('Aborted', 'AbortError');
         }
 
-        const result = await this.executeToolCall(toolUse);
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: result.content,
-          is_error: result.is_error,
+        this.emit({
+          type: 'tool_call',
+          data: { id: toolUse.id, name: toolUse.name, input: toolUse.input },
         });
+
+        const result = await this.executeToolCall(toolUse);
 
         this.emit({
           type: 'tool_result',
           data: { name: toolUse.name, result },
         });
-      }
+
+        return {
+          type: 'tool_result' as const,
+          tool_use_id: toolUse.id,
+          content: result.content,
+          is_error: result.is_error,
+        };
+      });
+
+      const toolResults: ContentBlock[] = await Promise.all(toolResultsPromises);
 
       // Add tool results as a user message (Anthropic convention)
       messages.push({ role: 'user', content: toolResults });
@@ -170,12 +177,6 @@ export class AgentLoop {
           if (currentText) {
             contentBlocks.push({ type: 'text', text: currentText });
             currentText = '';
-          }
-          if (event.toolCall) {
-            this.emit({
-              type: 'tool_call',
-              data: { id: event.toolCall.id, name: event.toolCall.name },
-            });
           }
           break;
         }

@@ -25,7 +25,7 @@ interface CommandDef {
   handler: (args: string, ctx: CommandContext) => Promise<CommandResult>;
 }
 
-const commands: CommandDef[] = [
+export const commands: CommandDef[] = [
   {
     name: '/help',
     description: 'Show available commands',

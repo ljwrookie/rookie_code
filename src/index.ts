@@ -25,7 +25,7 @@ async function main(): Promise<void> {
     strict: false,
   });
 
-  const config = loadConfig(values.model ? { model: values.model } : {});
+  const config = loadConfig(values.model ? { model: values.model as string } : {});
 
   // Validate API key
   if (!config.llm.apiKey) {
@@ -69,6 +69,7 @@ async function main(): Promise<void> {
   const repl = new REPL(agent, {
     provider,
     workingDirectory: workingDir,
+    renderer,
   });
   await repl.start();
 }

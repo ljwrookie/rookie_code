@@ -1,17 +1,116 @@
-import readline from 'node:readline/promises';
-import { stdin as input, stdout as output } from 'node:process';
+import { input } from '@inquirer/prompts';
+import { createPrompt, useState, useKeypress, isEnterKey, isUpKey, isDownKey } from '@inquirer/core';
+import type { InquirerReadline } from '@inquirer/type';
 import chalk from 'chalk';
 import type { AgentLoop } from '../agent/loop.js';
 import type { LLMProvider } from '../llm/provider.js';
 import { ConversationManager } from '../agent/conversation.js';
 import { GitOperations } from '../repo/git.js';
 import { Renderer } from './renderer.js';
-import { executeCommand, type CommandContext } from './commands.js';
+import { executeCommand, commands, type CommandContext } from './commands.js';
+
+// #region debug-point A:repl-debug
+const DEBUG_ENDPOINT = process.env.ROOKIE_DEBUG_URL;
+const DEBUG_SESSION_ID = process.env.ROOKIE_DEBUG_SESSION_ID ?? 'rookie-cli';
+const DEBUG_RUN_ID = process.env.ROOKIE_DEBUG_RUN_ID ?? 'pre-fix';
+
+function reportDebug(event: string, payload: Record<string, unknown>): void {
+  if (!DEBUG_ENDPOINT) return;
+  void fetch(DEBUG_ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: DEBUG_SESSION_ID,
+      runId: DEBUG_RUN_ID,
+      hypothesisId: 'A',
+      location: 'src/cli/repl.ts',
+      msg: `[DEBUG] repl:${event}`,
+      data: payload,
+      ts: Date.now(),
+    }),
+  }).catch(() => undefined);
+}
+// #endregion
 
 export interface REPLOptions {
   provider: LLMProvider;
   workingDirectory: string;
+  renderer?: Renderer;
 }
+
+const replPrompt = createPrompt<string, { message: string }>((config, done) => {
+  const [value, setValue] = useState('');
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [isDone, setIsDone] = useState(false);
+
+  const isCommand = value.startsWith('/');
+  const hasSpace = value.includes(' ');
+  const suggestions = (isCommand && !hasSpace)
+    ? commands.filter(c => c.name.startsWith(value))
+    : [];
+
+  useKeypress((key, rl) => {
+    const readline = rl as InquirerReadline & { cursor: number };
+
+    if (isEnterKey(key)) {
+      const submitted = value || readline.line;
+      setValue(submitted);
+      setIsDone(true);
+      done(submitted);
+    } else if (key.name === 'tab') {
+      if (suggestions.length > 0) {
+        const suggestion = suggestions[activeIdx]?.name;
+        if (suggestion) {
+          readline.line = suggestion + ' ';
+          readline.cursor = readline.line.length;
+          setValue(readline.line);
+          setActiveIdx(0);
+        }
+      }
+    } else if (key.name === 'up' || isUpKey(key)) {
+      if (suggestions.length > 0) {
+        setActiveIdx(activeIdx > 0 ? activeIdx - 1 : suggestions.length - 1);
+      }
+    } else if (key.name === 'down' || isDownKey(key)) {
+      if (suggestions.length > 0) {
+        setActiveIdx(activeIdx < suggestions.length - 1 ? activeIdx + 1 : 0);
+      }
+    } else {
+      if (value !== readline.line) {
+        setValue(readline.line);
+        setActiveIdx(0);
+      }
+    }
+  });
+
+  const message = config.message;
+  let formattedValue = value;
+  
+  if (isDone) {
+    return `${message}${value}\n`;
+  }
+
+  if (suggestions.length > 0 && activeIdx < suggestions.length) {
+    const suggestion = suggestions[activeIdx]?.name;
+    if (suggestion && suggestion.startsWith(value)) {
+      const hint = suggestion.slice(value.length);
+      formattedValue = value + chalk.gray(hint);
+    }
+  }
+
+  let output = `${message}${formattedValue}`;
+
+  if (suggestions.length > 0 && !hasSpace) {
+    const list = suggestions.map((s, i) => {
+      const prefix = i === activeIdx ? chalk.cyan('❯') : ' ';
+      const name = i === activeIdx ? chalk.cyan(s.name) : s.name;
+      return `${prefix} ${name}  ${chalk.gray(s.description)}`;
+    }).join('\n');
+    return [output, list];
+  }
+
+  return output;
+});
 
 /**
  * Interactive REPL for the code agent.
@@ -29,7 +128,7 @@ export class REPL {
   ) {
     this.conversation = new ConversationManager();
     this.git = new GitOperations(options.workingDirectory);
-    this.renderer = new Renderer();
+    this.renderer = options.renderer ?? new Renderer();
     this.commandCtx = {
       conversation: this.conversation,
       git: this.git,
@@ -41,8 +140,6 @@ export class REPL {
   async start(): Promise<void> {
     this.renderer.renderWelcome();
 
-    const rl = readline.createInterface({ input, output, terminal: true });
-
     // Handle Ctrl+C: abort current request, don't exit
     process.on('SIGINT', () => {
       if (this.abortController) {
@@ -50,25 +147,33 @@ export class REPL {
         this.abortController = null;
         this.renderer.endStream();
         console.error(chalk.yellow('\n⚠ Request cancelled.'));
-        rl.prompt();
       } else {
         // No active request — exit
         console.error(chalk.gray('\nBye!'));
-        rl.close();
         process.exit(0);
       }
     });
 
-    rl.setPrompt(chalk.green.bold('rookie ') + chalk.cyan.bold('❯ '));
-
     while (true) {
-      rl.prompt();
       let userInput: string;
       try {
-        const line = await rl.question('');
+        const line = await replPrompt({
+          message: chalk.green.bold('rookie ') + chalk.cyan.bold('❯ '),
+        });
         userInput = line.trim();
-      } catch {
-        // EOF or readline closed
+        reportDebug('prompt_submitted', {
+          rawLength: line.length,
+          trimmedLength: userInput.length,
+          preview: userInput.slice(0, 80),
+        });
+        if (userInput) {
+          console.error(chalk.green.bold('rookie ') + chalk.cyan.bold('❯ ') + userInput);
+        }
+      } catch (err: any) {
+        if (err.name === 'ExitPromptError') {
+          console.error(chalk.gray('\nBye!'));
+          break;
+        }
         break;
       }
 
@@ -76,6 +181,7 @@ export class REPL {
 
       // Handle slash commands
       if (userInput.startsWith('/')) {
+        reportDebug('slash_command', { command: userInput });
         const result = await executeCommand(userInput, this.commandCtx);
         if (result === 'exit') {
           console.error(chalk.gray('Bye!'));
@@ -89,9 +195,21 @@ export class REPL {
       while (fullInput.endsWith('\\')) {
         fullInput = fullInput.slice(0, -1) + '\n';
         try {
-          const continuation = await rl.question(chalk.cyan.bold('       ❯ '));
+          const continuation = await input({
+            message: chalk.cyan.bold('       ❯ '),
+            transformer: (value: string, { isFinal }) => {
+              return isFinal ? value : value;
+            },
+            theme: {
+              prefix: ''
+            }
+          });
           fullInput += continuation;
-        } catch {
+          console.error(chalk.cyan.bold('       ❯ ') + continuation);
+        } catch (err: any) {
+          if (err.name === 'ExitPromptError') {
+            break;
+          }
           break;
         }
       }
@@ -102,7 +220,12 @@ export class REPL {
         // Auto-checkpoint before running agent (if in git repo)
         await this.maybeCheckpoint();
 
+        this.renderer.startThinking();
         const history = this.conversation.getMessages();
+        reportDebug('agent_run_started', {
+          inputLength: fullInput.length,
+          historyLength: history.length,
+        });
         const updatedHistory = await this.agentLoop.run(
           fullInput,
           history,
@@ -114,10 +237,18 @@ export class REPL {
         // We need to extract only the new messages added during this run
         const newMessages = updatedHistory.slice(history.length);
         this.conversation.addMessages(newMessages);
+        reportDebug('agent_run_completed', {
+          updatedHistoryLength: updatedHistory.length,
+          newMessagesLength: newMessages.length,
+        });
 
         this.renderer.endStream();
         console.error(''); // blank line after response
       } catch (err) {
+        reportDebug('agent_run_failed', {
+          name: err instanceof Error ? err.name : 'unknown',
+          message: err instanceof Error ? err.message : String(err),
+        });
         this.renderer.endStream();
         if (err instanceof DOMException && err.name === 'AbortError') {
           // Already handled by SIGINT handler
@@ -130,8 +261,6 @@ export class REPL {
         this.abortController = null;
       }
     }
-
-    rl.close();
   }
 
   /**

@@ -1,0 +1,2 @@
+{"sessionId": "rookie-cli", "runId": "pre-fix", "hypothesisId": "A", "location": "src/cli/repl.ts", "msg": "[DEBUG] repl:prompt_submitted", "data": {"rawLength": 0, "trimmedLength": 0, "preview": ""}, "ts": 1775730102512}
+{"sessionId": "rookie-cli", "runId": "pre-fix", "hypothesisId": "A", "location": "src/cli/repl.ts", "msg": "[DEBUG] repl:prompt_submitted", "data": {"rawLength": 2, "trimmedLength": 2, "preview": "你好"}, "ts": 1775730196776}

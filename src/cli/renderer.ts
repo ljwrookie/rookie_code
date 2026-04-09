@@ -1,5 +1,29 @@
 import chalk from 'chalk';
+import ora, { Ora } from 'ora';
 import type { ToolResult, AgentEvent } from '../types.js';
+
+// #region debug-point B:renderer-debug
+const DEBUG_ENDPOINT = process.env.ROOKIE_DEBUG_URL;
+const DEBUG_SESSION_ID = process.env.ROOKIE_DEBUG_SESSION_ID ?? 'rookie-cli';
+const DEBUG_RUN_ID = process.env.ROOKIE_DEBUG_RUN_ID ?? 'pre-fix';
+
+function reportDebug(event: string, payload: Record<string, unknown>): void {
+  if (!DEBUG_ENDPOINT) return;
+  void fetch(DEBUG_ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: DEBUG_SESSION_ID,
+      runId: DEBUG_RUN_ID,
+      hypothesisId: 'B',
+      location: 'src/cli/renderer.ts',
+      msg: `[DEBUG] renderer:${event}`,
+      data: payload,
+      ts: Date.now(),
+    }),
+  }).catch(() => undefined);
+}
+// #endregion
 
 /**
  * Minimal streaming renderer for terminal output.
@@ -7,17 +31,45 @@ import type { ToolResult, AgentEvent } from '../types.js';
  */
 export class Renderer {
   private isStreaming = false;
+  private spinner: Ora | null = null;
+
+  /** Start thinking animation */
+  startThinking(): void {
+    reportDebug('thinking_started', { isStreaming: this.isStreaming });
+    this.endStream();
+    if (!this.spinner) {
+      this.spinner = ora({
+        text: chalk.gray('Thinking...'),
+        color: 'cyan',
+        spinner: 'dots'
+      }).start();
+    }
+  }
+
+  /** Stop thinking animation */
+  stopThinking(): void {
+    reportDebug('thinking_stopped', { hasSpinner: Boolean(this.spinner) });
+    if (this.spinner) {
+      this.spinner.stop();
+      this.spinner = null;
+    }
+  }
 
   /** Render a text delta (streaming token) */
   renderTextDelta(text: string): void {
+    reportDebug('text_delta', { length: text.length, preview: text.slice(0, 80) });
+    this.stopThinking();
     if (!this.isStreaming) {
       this.isStreaming = true;
     }
+    
+    // Write directly to stdout to enable real-time streaming
     process.stdout.write(text);
   }
 
   /** End the current streaming text block */
   endStream(): void {
+    this.stopThinking();
     if (this.isStreaming) {
       process.stdout.write('\n');
       this.isStreaming = false;
@@ -33,10 +85,13 @@ export class Renderer {
       chalk.yellow.bold(name) +
       chalk.gray(` ${inputSummary}`),
     );
+    // Restart thinking after showing the tool call
+    this.startThinking();
   }
 
   /** Render a tool result */
   renderToolResult(name: string, result: ToolResult): void {
+    this.stopThinking();
     if (result.is_error) {
       console.error(
         chalk.red('  ✖  ') +
@@ -53,6 +108,8 @@ export class Renderer {
         chalk.gray(preview),
       );
     }
+    // Restart thinking after tool result, as LLM will process it
+    this.startThinking();
   }
 
   /** Render an error */
@@ -82,6 +139,7 @@ export class Renderer {
 
   /** Handle an agent event */
   handleEvent(event: AgentEvent): void {
+    reportDebug('handle_event', { type: event.type });
     switch (event.type) {
       case 'text_delta':
         this.renderTextDelta(event.data as string);
