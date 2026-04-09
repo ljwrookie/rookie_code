@@ -1,0 +1,42 @@
+{
+  "name": "rookie-code",
+  "version": "0.1.0",
+  "description": "CLI-based code agent powered by LLM",
+  "type": "module",
+  "bin": {
+    "rookie-code": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "cli",
+    "code-agent",
+    "llm",
+    "ai"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/diff": "^8.0.0",
+    "@types/node": "^25.5.2",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.4"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.86.1",
+    "chalk": "^5.6.2",
+    "diff": "^8.0.4",
+    "dotenv": "^17.4.1",
+    "js-tiktoken": "^1.0.21",
+    "openai": "^6.34.0"
+  }
+}
