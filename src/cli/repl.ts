@@ -5,36 +5,15 @@ import chalk from 'chalk';
 import type { AgentLoop } from '../agent/loop.js';
 import type { LLMProvider } from '../llm/provider.js';
 import { ConversationManager } from '../agent/conversation.js';
+import type { MemoryManager } from '../memory/manager.js';
 import { GitOperations } from '../repo/git.js';
 import { Renderer } from './renderer.js';
 import { executeCommand, commands, type CommandContext } from './commands.js';
 
-// #region debug-point A:repl-debug
-const DEBUG_ENDPOINT = process.env.ROOKIE_DEBUG_URL;
-const DEBUG_SESSION_ID = process.env.ROOKIE_DEBUG_SESSION_ID ?? 'rookie-cli';
-const DEBUG_RUN_ID = process.env.ROOKIE_DEBUG_RUN_ID ?? 'pre-fix';
-
-function reportDebug(event: string, payload: Record<string, unknown>): void {
-  if (!DEBUG_ENDPOINT) return;
-  void fetch(DEBUG_ENDPOINT, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      sessionId: DEBUG_SESSION_ID,
-      runId: DEBUG_RUN_ID,
-      hypothesisId: 'A',
-      location: 'src/cli/repl.ts',
-      msg: `[DEBUG] repl:${event}`,
-      data: payload,
-      ts: Date.now(),
-    }),
-  }).catch(() => undefined);
-}
-// #endregion
-
 export interface REPLOptions {
   provider: LLMProvider;
   workingDirectory: string;
+  memoryManager: MemoryManager;
   renderer?: Renderer;
 }
 
@@ -134,6 +113,7 @@ export class REPL {
       git: this.git,
       provider: options.provider,
       workingDirectory: options.workingDirectory,
+      memoryManager: options.memoryManager,
     };
   }
 
@@ -161,11 +141,6 @@ export class REPL {
           message: chalk.green.bold('rookie ') + chalk.cyan.bold('❯ '),
         });
         userInput = line.trim();
-        reportDebug('prompt_submitted', {
-          rawLength: line.length,
-          trimmedLength: userInput.length,
-          preview: userInput.slice(0, 80),
-        });
       } catch (err: any) {
         if (err.name === 'ExitPromptError') {
           console.error(chalk.gray('\nBye!'));
@@ -178,7 +153,6 @@ export class REPL {
 
       // Handle slash commands
       if (userInput.startsWith('/')) {
-        reportDebug('slash_command', { command: userInput });
         const result = await executeCommand(userInput, this.commandCtx);
         if (result === 'exit') {
           console.error(chalk.gray('Bye!'));
@@ -219,10 +193,7 @@ export class REPL {
 
         this.renderer.startThinking();
         const history = this.conversation.getMessages();
-        reportDebug('agent_run_started', {
-          inputLength: fullInput.length,
-          historyLength: history.length,
-        });
+        const turn = this.commandCtx.memoryManager?.advanceTurn();
         const updatedHistory = await this.agentLoop.run(
           fullInput,
           history,
@@ -234,18 +205,17 @@ export class REPL {
         // We need to extract only the new messages added during this run
         const newMessages = updatedHistory.slice(history.length);
         this.conversation.addMessages(newMessages);
-        reportDebug('agent_run_completed', {
-          updatedHistoryLength: updatedHistory.length,
-          newMessagesLength: newMessages.length,
-        });
+        if (turn != null) {
+          await this.commandCtx.memoryManager?.captureAutoMemory({
+            userInput: fullInput,
+            turn,
+            scope: 'project',
+          });
+        }
 
         this.renderer.endStream();
         console.error(''); // blank line after response
       } catch (err) {
-        reportDebug('agent_run_failed', {
-          name: err instanceof Error ? err.name : 'unknown',
-          message: err instanceof Error ? err.message : String(err),
-        });
         this.renderer.endStream();
         if (err instanceof DOMException && err.name === 'AbortError') {
           // Already handled by SIGINT handler

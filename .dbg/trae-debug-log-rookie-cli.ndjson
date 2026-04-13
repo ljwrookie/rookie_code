@@ -1,8 +1,0 @@
-{"sessionId": "rookie-cli", "runId": "pre-fix", "hypothesisId": "A", "location": "src/cli/repl.ts", "msg": "[DEBUG] repl:prompt_submitted", "data": {"rawLength": 0, "trimmedLength": 0, "preview": ""}, "ts": 1775730102512}
-{"sessionId": "rookie-cli", "runId": "pre-fix", "hypothesisId": "A", "location": "src/cli/repl.ts", "msg": "[DEBUG] repl:prompt_submitted", "data": {"rawLength": 2, "trimmedLength": 2, "preview": "你好"}, "ts": 1775730196776}
-{"sessionId": "rookie-cli", "runId": "pre-fix", "hypothesisId": "B", "location": "src/cli/renderer.ts", "msg": "[DEBUG] renderer:thinking_started", "data": {"isStreaming": false}, "ts": 1775730196925}
-{"sessionId": "rookie-cli", "runId": "pre-fix", "hypothesisId": "B", "location": "src/cli/renderer.ts", "msg": "[DEBUG] renderer:thinking_stopped", "data": {"hasSpinner": false}, "ts": 1775730196926}
-{"sessionId": "rookie-cli", "runId": "pre-fix", "hypothesisId": "A", "location": "src/cli/repl.ts", "msg": "[DEBUG] repl:agent_run_started", "data": {"inputLength": 2, "historyLength": 0}, "ts": 1775730196938}
-{"sessionId": "rookie-cli", "runId": "pre-fix", "hypothesisId": "A", "location": "src/cli/repl.ts", "msg": "[DEBUG] repl:agent_run_failed", "data": {"name": "LLMError", "message": "Invalid API key. Set OPENAI_API_KEY environment variable."}, "ts": 1775730197557}
-{"sessionId": "rookie-cli", "runId": "pre-fix", "hypothesisId": "B", "location": "src/cli/renderer.ts", "msg": "[DEBUG] renderer:thinking_stopped", "data": {"hasSpinner": true}, "ts": 1775730197558}
-{"sessionId": "rookie-cli", "runId": "pre-fix", "hypothesisId": "B", "location": "src/cli/renderer.ts", "msg": "[DEBUG] renderer:thinking_stopped", "data": {"hasSpinner": false}, "ts": 1775730197558}

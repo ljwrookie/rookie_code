@@ -11,6 +11,8 @@ import { AgentLoop } from './agent/loop.js';
 import { REPL } from './cli/repl.js';
 import { Renderer } from './cli/renderer.js';
 import { loadConfig } from './config/loader.js';
+import { MemoryManager } from './memory/manager.js';
+import { MemoryStore } from './memory/store.js';
 import { parseArgs } from 'node:util';
 
 async function main(): Promise<void> {
@@ -57,18 +59,24 @@ async function main(): Promise<void> {
   // Initialize renderer for streaming output
   const renderer = new Renderer();
 
+  // Initialize shared long-term memory services
+  const memoryStore = new MemoryStore({ cwd: workingDir });
+  const memoryManager = new MemoryManager(memoryStore);
+
   // Initialize agent loop
   const agent = new AgentLoop(provider, tools, {
     maxIterations: config.agent.maxIterations,
     tokenBudget: config.agent.tokenBudget,
     workingDirectory: workingDir,
     onEvent: (event) => renderer.handleEvent(event),
+    memoryManager,
   });
 
   // Start REPL with full context
   const repl = new REPL(agent, {
     provider,
     workingDirectory: workingDir,
+    memoryManager,
     renderer,
   });
   await repl.start();

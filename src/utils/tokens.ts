@@ -53,6 +53,13 @@ export function countMessagesTokens(messages: Message[]): number {
 }
 
 /**
+ * Count total prompt tokens including system prompt and messages.
+ */
+export function countPromptTokens(params: { system: string; messages: Message[] }): number {
+  return countTokens(params.system) + countMessagesTokens(params.messages);
+}
+
+/**
  * Check if messages fit within a token budget.
  */
 export function isWithinBudget(

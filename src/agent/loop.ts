@@ -2,14 +2,16 @@ import type { LLMProvider } from '../llm/provider.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { Message, ContentBlock, ToolUseBlock, ToolResult, AgentEvent } from '../types.js';
 import { buildSystemPrompt } from './system-prompt.js';
-import { countMessagesTokens } from '../utils/tokens.js';
+import { countPromptTokens } from '../utils/tokens.js';
 import { logger } from '../utils/logger.js';
+import type { MemoryManager } from '../memory/manager.js';
 
 export interface AgentLoopOptions {
   maxIterations: number;
   tokenBudget?: number;
   workingDirectory: string;
   onEvent?: (event: AgentEvent) => void;
+  memoryManager?: MemoryManager;
 }
 
 /**
@@ -19,18 +21,11 @@ export interface AgentLoopOptions {
  * between the user, the LLM, and the tool system.
  */
 export class AgentLoop {
-  private systemPrompt: string;
-
   constructor(
     private provider: LLMProvider,
     private tools: ToolRegistry,
     private options: AgentLoopOptions,
-  ) {
-    this.systemPrompt = buildSystemPrompt({
-      workingDirectory: options.workingDirectory,
-      availableTools: tools.getNames(),
-    });
-  }
+  ) {}
 
   /**
    * Run the agent loop for a single user message.
@@ -55,9 +50,9 @@ export class AgentLoop {
       }
 
       // Token budget safety valve
+      const promptState = await this.preparePromptState(messages);
       if (this.options.tokenBudget) {
-        const currentTokens = countMessagesTokens(messages);
-        if (currentTokens > this.options.tokenBudget * 0.9) {
+        if (promptState.totalTokens > this.options.tokenBudget * 0.9) {
           logger.warn('Token budget nearly exhausted, stopping agent loop.');
           messages.push({
             role: 'assistant',
@@ -69,6 +64,7 @@ export class AgentLoop {
 
       // Call LLM with streaming
       const { content, stopReason } = await this.streamLLMResponse(
+        promptState.systemPrompt,
         messages,
         signal,
       );
@@ -128,14 +124,17 @@ export class AgentLoop {
     if (iteration >= this.options.maxIterations) {
       logger.warn(`Reached maximum iterations (${this.options.maxIterations}). Stopping.`);
       // One final call without tools to let LLM summarize
+      const summaryMessages = [
+        ...messages,
+        {
+          role: 'user' as const,
+          content: `You've reached the maximum number of tool call iterations (${this.options.maxIterations}). Please summarize what you've accomplished and what remains to be done.`,
+        },
+      ];
+      const promptState = await this.preparePromptState(summaryMessages);
       const { content } = await this.streamLLMResponse(
-        [
-          ...messages,
-          {
-            role: 'user',
-            content: `You've reached the maximum number of tool call iterations (${this.options.maxIterations}). Please summarize what you've accomplished and what remains to be done.`,
-          },
-        ],
+        promptState.systemPrompt,
+        summaryMessages,
         signal,
         false, // no tools
       );
@@ -149,6 +148,7 @@ export class AgentLoop {
    * Stream LLM response, emitting events and collecting content blocks.
    */
   private async streamLLMResponse(
+    systemPrompt: string,
     messages: Message[],
     signal?: AbortSignal,
     includeTools: boolean = true,
@@ -158,7 +158,7 @@ export class AgentLoop {
     let stopReason = 'end_turn';
 
     const stream = this.provider.stream({
-      system: this.systemPrompt,
+      system: systemPrompt,
       messages,
       tools: includeTools ? this.tools.getDefinitions() : undefined,
       signal,
@@ -206,6 +206,42 @@ export class AgentLoop {
     }
 
     return { content: contentBlocks, stopReason };
+  }
+
+  private async preparePromptState(messages: Message[]): Promise<{
+    systemPrompt: string;
+    totalTokens: number;
+  }> {
+    const baseSystemPrompt = buildSystemPrompt({
+      workingDirectory: this.options.workingDirectory,
+      availableTools: this.tools.getNames(),
+    });
+
+    let memorySection: string | null = null;
+    if (this.options.memoryManager) {
+      try {
+        const memoryPrompt = await this.options.memoryManager.buildPromptSection({
+          baseSystemPrompt,
+          messages,
+          tokenBudget: this.options.tokenBudget,
+        });
+        memorySection = memoryPrompt.memorySection;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.warn(`Failed to build memory prompt section: ${message}`);
+      }
+    }
+
+    const systemPrompt = buildSystemPrompt({
+      workingDirectory: this.options.workingDirectory,
+      availableTools: this.tools.getNames(),
+      memorySection,
+    });
+
+    return {
+      systemPrompt,
+      totalTokens: countPromptTokens({ system: systemPrompt, messages }),
+    };
   }
 
   /**

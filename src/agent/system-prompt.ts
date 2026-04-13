@@ -4,8 +4,9 @@
 export function buildSystemPrompt(params: {
   workingDirectory: string;
   availableTools: string[];
+  memorySection?: string | null;
 }): string {
-  const { workingDirectory, availableTools } = params;
+  const { workingDirectory, availableTools, memorySection } = params;
 
   return `You are an expert software engineer working as a CLI code assistant.
 
@@ -50,5 +51,7 @@ export function buildSystemPrompt(params: {
 - Make small, targeted edits rather than rewriting entire files.
 - After making changes, verify them by reading the file or running tests.
 - If an edit fails (old_string not found), re-read the file and try again with corrected content.
-`;
+
+${memorySection ? `${memorySection}
+` : ''}`;
 }
