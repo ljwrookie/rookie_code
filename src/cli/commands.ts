@@ -12,6 +12,7 @@ import type { LLMProvider } from '../llm/provider.js';
 import type { MemoryManager } from '../memory/manager.js';
 import type { MemoryIgnoreInput, MemoryKind, MemoryRecord, MemoryScope, MemoryScopeInput, MemoryUpsertInput } from '../memory/types.js';
 import type { GitOperations } from '../repo/git.js';
+import type { McpManager } from '../mcp/manager.js';
 
 const INIT_DEFAULTS = {
   tone: 'balanced',
@@ -33,6 +34,7 @@ export interface CommandContext {
   workingDirectory: string;
   memoryManager?: MemoryManager;
   prompts?: CommandPrompts;
+  mcpManager?: McpManager;
 }
 
 export type CommandResult = 'exit' | 'handled' | 'unknown';
@@ -223,6 +225,41 @@ export const commands: CommandDef[] = [
       const summary = ctx.conversation.getSummary();
       if (summary) {
         console.error(chalk.gray(`Has summary: yes (${summary.length} chars)`));
+      }
+      console.error('');
+      return 'handled';
+    },
+  },
+  {
+    name: '/mcp',
+    description: 'Show MCP servers/tools loaded from .mcp.json',
+    handler: async (_args, ctx) => {
+      const mcp = ctx.mcpManager;
+      if (!mcp) {
+        console.error(chalk.gray('MCP: disabled.\n'));
+        return 'handled';
+      }
+
+      const servers = mcp.listServers();
+      const tools = mcp.listMountedTools();
+
+      if (servers.length === 0) {
+        console.error(chalk.gray('MCP: no servers connected (missing or empty .mcp.json).\n'));
+        return 'handled';
+      }
+
+      console.error(chalk.bold('\nMCP servers:'));
+      for (const s of servers) {
+        console.error(chalk.cyan(`  ${s.name}`), chalk.gray(`(${s.transport}), tools=${s.toolCount}`));
+      }
+
+      console.error(chalk.bold('\nMounted MCP tools:'));
+      if (tools.length === 0) {
+        console.error(chalk.gray('  (none)'));
+      } else {
+        for (const t of tools) {
+          console.error(chalk.gray(`  - ${t}`));
+        }
       }
       console.error('');
       return 'handled';

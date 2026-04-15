@@ -7,6 +7,7 @@ import { WriteFileTool } from './tools/write-file.js';
 import { ShellExecTool } from './tools/shell-exec.js';
 import { SearchCodeTool } from './tools/search-code.js';
 import { ListFilesTool } from './tools/list-files.js';
+import { AgentTool, MultiAgentTool } from './tools/agents.js';
 import { AgentLoop } from './agent/loop.js';
 import { REPL } from './cli/repl.js';
 import { Renderer } from './cli/renderer.js';
@@ -14,6 +15,7 @@ import { loadConfig } from './config/loader.js';
 import { MemoryManager } from './memory/manager.js';
 import { MemoryStore } from './memory/store.js';
 import { parseArgs } from 'node:util';
+import { McpManager } from './mcp/manager.js';
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
@@ -56,8 +58,40 @@ async function main(): Promise<void> {
   tools.register(new SearchCodeTool(workingDir));
   tools.register(new ListFilesTool(workingDir));
 
+  // Optional: mount MCP tools from `.mcp.json` (if present)
+  const mcpManager = new McpManager(workingDir);
+  await mcpManager.init();
+  mcpManager.mountTools(tools);
+
   // Initialize renderer for streaming output
   const renderer = new Renderer();
+
+  const readEnvInt = (name: string, fallback: number): number => {
+    const raw = process.env[name];
+    if (!raw) return fallback;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  };
+
+  const maxAgentDepth = readEnvInt('ROOKIE_MAX_AGENT_DEPTH', 3);
+  const maxParallelAgents = readEnvInt('ROOKIE_MAX_PARALLEL_AGENTS', 5);
+
+  // Register multi-agent tools (agent / multiagent)
+  tools.register(new AgentTool({
+    provider,
+    parentRegistry: tools,
+    workingDirectory: workingDir,
+    onEvent: (event) => renderer.handleEvent(event),
+    maxAgentDepth,
+  }));
+  tools.register(new MultiAgentTool({
+    provider,
+    parentRegistry: tools,
+    workingDirectory: workingDir,
+    onEvent: (event) => renderer.handleEvent(event),
+    maxAgentDepth,
+    maxParallelAgents,
+  }));
 
   // Initialize shared long-term memory services
   const memoryStore = new MemoryStore({ cwd: workingDir });
@@ -70,6 +104,7 @@ async function main(): Promise<void> {
     workingDirectory: workingDir,
     onEvent: (event) => renderer.handleEvent(event),
     memoryManager,
+    depth: 0,
   });
 
   // Start REPL with full context
@@ -78,6 +113,7 @@ async function main(): Promise<void> {
     workingDirectory: workingDir,
     memoryManager,
     renderer,
+    mcpManager,
   });
   await repl.start();
 }

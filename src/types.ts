@@ -87,6 +87,15 @@ export type AgentState =
   | 'error';
 
 export interface AgentEvent {
-  type: 'text_delta' | 'tool_call' | 'tool_result' | 'response' | 'error';
+  type:
+    | 'text_delta'
+    | 'tool_call'
+    | 'tool_result'
+    | 'response'
+    | 'error'
+    | 'agent_start'
+    | 'agent_end';
   data: unknown;
+  /** Agent nesting depth. Top-level agent = 0. */
+  depth?: number;
 }

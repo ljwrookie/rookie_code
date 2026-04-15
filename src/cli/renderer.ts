@@ -51,11 +51,12 @@ export class Renderer {
   }
 
   /** Render a tool call notification */
-  renderToolCall(name: string, input: Record<string, unknown>): void {
+  renderToolCall(name: string, input: Record<string, unknown>, depth: number = 0): void {
     this.endStream();
+    const indent = '  '.repeat(Math.max(0, depth));
     const inputSummary = this.summarizeInput(input);
     console.error(
-      chalk.yellow('  ⚙  ') +
+      indent + chalk.yellow('⚙ ') +
       chalk.yellow.bold(name) +
       chalk.gray(` ${inputSummary}`),
     );
@@ -64,11 +65,12 @@ export class Renderer {
   }
 
   /** Render a tool result */
-  renderToolResult(name: string, result: ToolResult): void {
+  renderToolResult(name: string, result: ToolResult, depth: number = 0): void {
     this.stopThinking();
+    const indent = '  '.repeat(Math.max(0, depth));
     if (result.is_error) {
       console.error(
-        chalk.red('  ✖  ') +
+        indent + chalk.red('✖ ') +
         chalk.red(name) +
         chalk.gray(': ') +
         chalk.red(this.truncateForDisplay(result.content, 200)),
@@ -76,7 +78,7 @@ export class Renderer {
     } else {
       const preview = this.truncateForDisplay(result.content, 150);
       console.error(
-        chalk.green('  ✔  ') +
+        indent + chalk.green('✔ ') +
         chalk.green(name) +
         chalk.gray(': ') +
         chalk.gray(preview),
@@ -120,13 +122,45 @@ export class Renderer {
 
       case 'tool_call': {
         const tc = event.data as { id: string; name: string; input?: Record<string, unknown> };
-        this.renderToolCall(tc.name, tc.input ?? {});
+        this.renderToolCall(tc.name, tc.input ?? {}, event.depth ?? 0);
         break;
       }
 
       case 'tool_result': {
         const tr = event.data as { name: string; result: ToolResult };
-        this.renderToolResult(tr.name, tr.result);
+        this.renderToolResult(tr.name, tr.result, event.depth ?? 0);
+        break;
+      }
+
+      case 'agent_start': {
+        this.endStream();
+        const depth = event.depth ?? 0;
+        const indent = '  '.repeat(Math.max(0, depth));
+        const data = event.data as any;
+        const mode = typeof data?.mode === 'string' ? data.mode : 'agent';
+        const task = typeof data?.task === 'string' ? data.task : '';
+        const summary = task ? this.truncateForDisplay(task, 120) : '';
+        console.error(
+          indent + chalk.cyan('↳ ') + chalk.cyan.bold(mode) + chalk.gray(summary ? `: ${summary}` : ''),
+        );
+        this.startThinking();
+        break;
+      }
+
+      case 'agent_end': {
+        this.endStream();
+        const depth = event.depth ?? 0;
+        const indent = '  '.repeat(Math.max(0, depth));
+        const data = event.data as any;
+        const mode = typeof data?.mode === 'string' ? data.mode : 'agent';
+        const ok = data?.ok !== false;
+        if (ok) {
+          console.error(indent + chalk.cyan('↲ ') + chalk.cyan.bold(mode) + chalk.gray(' done'));
+        } else {
+          const msg = typeof data?.error === 'string' ? data.error : 'unknown error';
+          console.error(indent + chalk.red('↲ ') + chalk.red.bold(mode) + chalk.red(` failed: ${msg}`));
+        }
+        this.startThinking();
         break;
       }
 

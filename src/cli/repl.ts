@@ -9,12 +9,14 @@ import type { MemoryManager } from '../memory/manager.js';
 import { GitOperations } from '../repo/git.js';
 import { Renderer } from './renderer.js';
 import { executeCommand, commands, type CommandContext } from './commands.js';
+import type { McpManager } from '../mcp/manager.js';
 
 export interface REPLOptions {
   provider: LLMProvider;
   workingDirectory: string;
   memoryManager: MemoryManager;
   renderer?: Renderer;
+  mcpManager?: McpManager;
 }
 
 const replPrompt = createPrompt<string, { message: string }>((config, done) => {
@@ -114,6 +116,7 @@ export class REPL {
       provider: options.provider,
       workingDirectory: options.workingDirectory,
       memoryManager: options.memoryManager,
+      mcpManager: options.mcpManager,
     };
   }
 

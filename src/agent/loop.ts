@@ -12,6 +12,8 @@ export interface AgentLoopOptions {
   workingDirectory: string;
   onEvent?: (event: AgentEvent) => void;
   memoryManager?: MemoryManager;
+  /** Agent nesting depth. Top-level agent = 0. */
+  depth?: number;
 }
 
 /**
@@ -97,7 +99,7 @@ export class AgentLoop {
           data: { id: toolUse.id, name: toolUse.name, input: toolUse.input },
         });
 
-        const result = await this.executeToolCall(toolUse);
+        const result = await this.executeToolCall(toolUse, signal);
 
         this.emit({
           type: 'tool_result',
@@ -248,7 +250,7 @@ export class AgentLoop {
    * Execute a tool call with defensive error handling.
    * Handles: malformed JSON, unknown tool, missing params.
    */
-  private async executeToolCall(toolUse: ToolUseBlock): Promise<ToolResult> {
+  private async executeToolCall(toolUse: ToolUseBlock, signal?: AbortSignal): Promise<ToolResult> {
     // 1. Check for malformed JSON (from streaming assembly)
     if (toolUse.input && '__raw_json' in toolUse.input) {
       return {
@@ -286,7 +288,10 @@ export class AgentLoop {
 
     // 4. Execute the tool
     try {
-      const result = await tool.execute(toolUse.input);
+      const depth = this.options.depth ?? 0;
+      const result = tool.executeWithContext
+        ? await tool.executeWithContext(toolUse.input, { signal, depth })
+        : await tool.execute(toolUse.input);
       // Set the correct tool_use_id
       return { ...result, tool_use_id: toolUse.id };
     } catch (err) {
@@ -300,6 +305,11 @@ export class AgentLoop {
   }
 
   private emit(event: AgentEvent): void {
+    const depth = this.options.depth ?? 0;
+    if (event.depth == null) {
+      this.options.onEvent?.({ ...event, depth });
+      return;
+    }
     this.options.onEvent?.(event);
   }
 }
