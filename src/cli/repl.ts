@@ -10,6 +10,7 @@ import { GitOperations } from '../repo/git.js';
 import { Renderer } from './renderer.js';
 import { executeCommand, commands, type CommandContext } from './commands.js';
 import type { McpManager } from '../mcp/manager.js';
+import type { SkillManager } from '../skills/manager.js';
 
 export interface REPLOptions {
   provider: LLMProvider;
@@ -17,6 +18,7 @@ export interface REPLOptions {
   memoryManager: MemoryManager;
   renderer?: Renderer;
   mcpManager?: McpManager;
+  skillManager?: SkillManager;
 }
 
 const replPrompt = createPrompt<string, { message: string }>((config, done) => {
@@ -117,7 +119,38 @@ export class REPL {
       workingDirectory: options.workingDirectory,
       memoryManager: options.memoryManager,
       mcpManager: options.mcpManager,
+      skillManager: options.skillManager,
     };
+  }
+
+  private buildSkillInvocation(input: string): string | null {
+    const manager = this.commandCtx.skillManager;
+    if (!manager) return null;
+    if (!input.startsWith('/')) return null;
+
+    const space = input.indexOf(' ');
+    const rawName = (space === -1 ? input.slice(1) : input.slice(1, space)).trim();
+    const args = (space === -1 ? '' : input.slice(space + 1)).trim();
+    if (!rawName) return null;
+
+    const skill = manager.get(rawName);
+    if (!skill) return null;
+
+    const meta = [
+      `name: ${skill.name}`,
+      skill.type ? `type: ${skill.type}` : null,
+      skill.description ? `description: ${skill.description}` : null,
+      `source: ${skill.sourcePath}`,
+    ].filter(Boolean).join('\n');
+
+    return [
+      `你正在使用一个可挂载 Skill：${skill.name}`,
+      `请将下方 SKILL 内容视为本次请求的“最高优先级工作指令”。`,
+      `如果 SKILL 与系统提示冲突，优先遵循 SKILL 的硬性约束（Hard constraints）。`,
+      `\n<<SKILL_META>>\n${meta}\n<</SKILL_META>>`,
+      `\n<<SKILL>>\n${skill.content}\n<</SKILL>>`,
+      `\n<<USER_INPUT>>\n${args || '(no extra args)'}\n<</USER_INPUT>>`,
+    ].join('\n');
   }
 
   async start(): Promise<void> {
@@ -161,7 +194,19 @@ export class REPL {
           console.error(chalk.gray('Bye!'));
           break;
         }
-        continue;
+
+        if (result === 'handled') {
+          continue;
+        }
+
+        // Fallback: treat unknown slash command as a skill entrypoint `/<skill>`
+        const skillInput = this.buildSkillInvocation(userInput);
+        if (skillInput) {
+          userInput = skillInput;
+          // fall through to agent execution
+        } else {
+          continue;
+        }
       }
 
       // Handle multi-line input (lines ending with \)

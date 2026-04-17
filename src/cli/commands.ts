@@ -13,6 +13,7 @@ import type { MemoryManager } from '../memory/manager.js';
 import type { MemoryIgnoreInput, MemoryKind, MemoryRecord, MemoryScope, MemoryScopeInput, MemoryUpsertInput } from '../memory/types.js';
 import type { GitOperations } from '../repo/git.js';
 import type { McpManager } from '../mcp/manager.js';
+import type { SkillManager } from '../skills/manager.js';
 
 const INIT_DEFAULTS = {
   tone: 'balanced',
@@ -35,6 +36,7 @@ export interface CommandContext {
   memoryManager?: MemoryManager;
   prompts?: CommandPrompts;
   mcpManager?: McpManager;
+  skillManager?: SkillManager;
 }
 
 export type CommandResult = 'exit' | 'handled' | 'unknown';
@@ -262,6 +264,61 @@ export const commands: CommandDef[] = [
         }
       }
       console.error('');
+      return 'handled';
+    },
+  },
+  {
+    name: '/skills',
+    description: 'List mounted skills (e.g. /omc)',
+    handler: async (_args, ctx) => {
+      const manager = ctx.skillManager;
+      if (!manager) {
+        console.error(chalk.gray('Skills: disabled.\n'));
+        return 'handled';
+      }
+
+      const skills = manager.list();
+      if (skills.length === 0) {
+        console.error(chalk.gray('Skills: no skills found.\n'));
+        return 'handled';
+      }
+
+      console.error(chalk.bold('\nMounted skills:'));
+      for (const s of skills) {
+        const desc = s.description ? `— ${s.description}` : '';
+        console.error(chalk.cyan(`  /${s.name}`), chalk.gray(desc));
+      }
+      console.error('');
+      return 'handled';
+    },
+  },
+  {
+    name: '/skill',
+    description: 'Show skill content by name (usage: /skill <name>)',
+    handler: async (args, ctx) => {
+      const manager = ctx.skillManager;
+      if (!manager) {
+        console.error(chalk.gray('Skills: disabled.\n'));
+        return 'handled';
+      }
+
+      const tokens = tokenizeArgs(args);
+      const name = (tokens[0] ?? '').trim();
+      if (!name) {
+        console.error(chalk.yellow('⚠ Usage: /skill <name>\n'));
+        return 'handled';
+      }
+
+      const skill = manager.get(name);
+      if (!skill) {
+        console.error(chalk.yellow(`⚠ Skill not found: ${name}. Use /skills to list.\n`));
+        return 'handled';
+      }
+
+      console.error(chalk.bold(`\nSkill: ${skill.name}`));
+      if (skill.description) console.error(chalk.gray(skill.description));
+      console.error(chalk.gray(`source: ${skill.sourcePath}`));
+      console.error('\n' + skill.content + '\n');
       return 'handled';
     },
   },

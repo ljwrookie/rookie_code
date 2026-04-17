@@ -16,6 +16,9 @@ import { MemoryManager } from './memory/manager.js';
 import { MemoryStore } from './memory/store.js';
 import { parseArgs } from 'node:util';
 import { McpManager } from './mcp/manager.js';
+import { SkillManager } from './skills/manager.js';
+import os from 'node:os';
+import path from 'node:path';
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
@@ -66,6 +69,19 @@ async function main(): Promise<void> {
   // Initialize renderer for streaming output
   const renderer = new Renderer();
 
+  // Initialize skill manager (optional)
+  const skillsDirsEnv = process.env['ROOKIE_SKILLS_DIRS'] ?? '';
+  const skillsDirs = skillsDirsEnv
+    ? skillsDirsEnv.split(',').map((s) => s.trim()).filter(Boolean)
+    : [
+      // Default: coco/oh-my-code skills on macOS (if present)
+      path.join(os.homedir(), 'Library', 'Caches', 'coco', 'plugins', 'oh-my-code', 'skills'),
+      // Optional: repo-local skills directory
+      path.join(workingDir, 'skills'),
+    ];
+  const skillManager = new SkillManager({ directories: skillsDirs });
+  await skillManager.init();
+
   const readEnvInt = (name: string, fallback: number): number => {
     const raw = process.env[name];
     if (!raw) return fallback;
@@ -114,6 +130,7 @@ async function main(): Promise<void> {
     memoryManager,
     renderer,
     mcpManager,
+    skillManager,
   });
   await repl.start();
 }
