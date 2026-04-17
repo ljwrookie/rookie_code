@@ -396,6 +396,12 @@ export async function executeCommand(input: string, ctx: CommandContext): Promis
 
   const cmd = commands.find(c => c.name === cmdName);
   if (!cmd) {
+    // If a skill exists with this name, let REPL handle it as a skill entrypoint.
+    // Avoid printing "Unknown command" which is misleading in that case.
+    const raw = cmdName.startsWith('/') ? cmdName.slice(1) : cmdName;
+    if (raw && ctx.skillManager?.has(raw)) {
+      return 'unknown';
+    }
     console.error(
       chalk.yellow(`Unknown command: ${cmdName}. Type /help for available commands.\n`),
     );
