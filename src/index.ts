@@ -24,6 +24,7 @@ import path from 'node:path';
 import { HookManager } from './hooks/manager.js';
 import { SessionLogger } from './observability/session-logger.js';
 import { logger, setLogLevel } from './utils/logger.js';
+import { loadHookPlugins } from './plugins/loader.js';
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
@@ -185,6 +186,9 @@ async function main(): Promise<void> {
     await sessionLogger.log('session_start', { cwd: workingDir, argv: process.argv.slice(2) });
     logger.success(`Debug log: ${sessionLogger.getLogFilePath()}`);
   }
+
+  // Load hook plugins before wiring built-in hook handlers.
+  await loadHookPlugins({ cwd: workingDir, hooks: hookManager });
 
   // Apply agent CLI overrides that are not part of loadConfig()
   if (values['max-iterations']) {

@@ -244,6 +244,20 @@ type: workflow
 
 Hook 用于在 REPL/AgentLoop 的关键节点做拦截、改写输入、记录日志或触发外部系统。事件与入参以 `src/hooks/manager.ts` 为准。
 
+### 插件加载（可插拔）
+
+启动时会自动加载以下位置的 hooks 插件（可选）：
+
+| 位置 | 说明 |
+|---|---|
+| `rookie.plugins.mjs` | 单文件入口插件（推荐：一个项目一个文件，集中管理） |
+| `.rookie-code/plugins/*.mjs` | 多插件目录（按文件名排序加载） |
+
+插件只需要导出一个函数（`default` / `register` / `plugin` 均可），签名为：`(ctx) => void | Promise<void)`，其中 `ctx` 包含：
+- `ctx.cwd`：工作目录
+- `ctx.hooks`：HookManager 实例（用 `hooks.on(...)` 注册）
+- `ctx.logger`：日志工具
+
 | Hook 事件 | 触发时机 | 入参 | 返回值/用途 |
 |---|---|---|---|
 | `session_start` | REPL 启动/clear/resume 时 | `{ source: 'startup' | 'resume' | 'clear' }` | 用于记录会话开始、初始化外部状态 |
@@ -284,6 +298,17 @@ hooks.on('permission_request', async ({ tool_input }) => {
   // 例如：将 shell_exec 的授权请求转发到外部系统
   // await notifyApprover(tool_input);
 });
+```
+
+示例（用插件文件实现，无需改主程序）：
+
+```js
+// rookie.plugins.mjs
+export default async function register({ hooks, logger }) {
+  hooks.on('pre_tool_use', async ({ tool_input }) => {
+    logger.debug(`[plugin] tool: ${tool_input?.name}`);
+  });
+}
 ```
 
 ## 🔌 MCP（Model Context Protocol）
