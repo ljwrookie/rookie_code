@@ -6,3 +6,9 @@ dist/
 log/
 .rookie-code/
 .omc/
+
+# Ignore all dot-prefixed directories anywhere (keep .github for CI/workflows)
+.*/
+**/.*/
+!.github/
+!.github/**
