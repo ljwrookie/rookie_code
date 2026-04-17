@@ -1,9 +1,13 @@
-import { spawn } from 'node:child_process';
 import type { Tool } from './base.js';
 import type { ToolDefinition, ToolResult } from '../types.js';
 import { truncateByLines } from '../utils/truncate.js';
+import { resolvePathForRead } from '../security/path-utils.js';
+import { runProcess } from '../utils/process.js';
+import type { ToolExecutionContext } from './base.js';
 
 const MAX_RESULTS = 50;
+const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_TIMEOUT_MS = 60_000;
 
 export class SearchCodeTool implements Tool {
   definition: ToolDefinition = {
@@ -31,6 +35,10 @@ export class SearchCodeTool implements Tool {
           type: 'number',
           description: `Maximum number of results. Defaults to ${MAX_RESULTS}.`,
         },
+        timeout_ms: {
+          type: 'number',
+          description: `Timeout in milliseconds. Defaults to ${DEFAULT_TIMEOUT_MS}. Max ${MAX_TIMEOUT_MS}.`,
+        },
       },
       required: ['pattern'],
     },
@@ -39,15 +47,24 @@ export class SearchCodeTool implements Tool {
   constructor(private workingDir: string) {}
 
   async execute(input: Record<string, unknown>): Promise<ToolResult> {
+    return this.executeWithContext(input, { depth: 0 });
+  }
+
+  async executeWithContext(input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<ToolResult> {
     const pattern = input['pattern'] as string;
     const searchPath = (input['path'] as string) ?? '.';
     const include = input['include'] as string | undefined;
-    const maxResults = (input['max_results'] as number) ?? MAX_RESULTS;
+    const maxResults = clampMaxResults(input['max_results'], MAX_RESULTS);
+    const timeoutMs = clampTimeoutMs(input['timeout_ms'], DEFAULT_TIMEOUT_MS);
 
     try {
+      const resolvedSearchPath = searchPath === '.'
+        ? this.workingDir
+        : await resolvePathForRead(this.workingDir, searchPath);
+
       // Try ripgrep first, then fallback to grep
-      const result = await this.tryRipgrep(pattern, searchPath, include, maxResults)
-        .catch(() => this.tryGrep(pattern, searchPath, include, maxResults));
+      const result = await this.tryRipgrep(pattern, resolvedSearchPath, include, maxResults, timeoutMs, ctx.signal)
+        .catch(() => this.tryGrep(pattern, resolvedSearchPath, include, maxResults, timeoutMs, ctx.signal));
 
       return result;
     } catch (err) {
@@ -65,6 +82,8 @@ export class SearchCodeTool implements Tool {
     searchPath: string,
     include: string | undefined,
     maxResults: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<ToolResult> {
     const args = [
       '--line-number',
@@ -79,7 +98,7 @@ export class SearchCodeTool implements Tool {
 
     args.push(pattern, searchPath);
 
-    return this.runSearch('rg', args);
+    return this.runSearch('rg', args, timeoutMs, signal);
   }
 
   private tryGrep(
@@ -87,6 +106,8 @@ export class SearchCodeTool implements Tool {
     searchPath: string,
     include: string | undefined,
     maxResults: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<ToolResult> {
     const args = [
       '-rn',
@@ -101,29 +122,27 @@ export class SearchCodeTool implements Tool {
     // Limit results via head
     args.push('-m', String(maxResults));
 
-    return this.runSearch('grep', args);
+    return this.runSearch('grep', args, timeoutMs, signal);
   }
 
-  private runSearch(cmd: string, args: string[]): Promise<ToolResult> {
+  private runSearch(cmd: string, args: string[], timeoutMs: number, signal?: AbortSignal): Promise<ToolResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(cmd, args, {
+      runProcess({
+        command: cmd,
+        args,
         cwd: this.workingDir,
-        timeout: 30_000,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      child.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      child.stderr?.on('data', (data: Buffer) => {
-        stderr += data.toString();
-      });
-
-      child.on('close', (code) => {
+        timeoutMs,
+        signal,
+      }).then(({ stdout, stderr, exitCode, timedOut, aborted }) => {
+        if (aborted) {
+          reject(new Error(`${cmd} aborted`));
+          return;
+        }
+        if (timedOut) {
+          reject(new Error(`${cmd} timed out after ${timeoutMs}ms`));
+          return;
+        }
+        const code = exitCode;
         if (code === 1 && !stderr) {
           // grep returns 1 for no matches
           resolve({
@@ -147,10 +166,20 @@ export class SearchCodeTool implements Tool {
           is_error: false,
         });
       });
-
-      child.on('error', () => {
-        reject(new Error(`${cmd} not found`));
-      });
     });
   }
+}
+
+function clampMaxResults(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  const n = Math.floor(value);
+  if (n <= 0) return 1;
+  return Math.min(n, MAX_RESULTS);
+}
+
+function clampTimeoutMs(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  const ms = Math.floor(value);
+  if (ms < 1_000) return 1_000;
+  return Math.min(ms, MAX_TIMEOUT_MS);
 }

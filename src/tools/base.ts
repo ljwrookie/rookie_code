@@ -1,10 +1,13 @@
 import type { ToolDefinition, ToolResult } from '../types.js';
+import type { HookManager } from '../hooks/manager.js';
 
 export interface ToolExecutionContext {
   /** Abort signal for cancelling ongoing work (e.g. Ctrl+C) */
   signal?: AbortSignal;
   /** Current agent nesting depth. Top-level agent = 0. */
   depth: number;
+  /** Hook manager for triggering hooks inside tools */
+  hookManager?: HookManager;
 }
 
 /**

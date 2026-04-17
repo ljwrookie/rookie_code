@@ -1,13 +1,16 @@
-import { spawn } from 'node:child_process';
 import type { Tool } from './base.js';
 import type { ToolDefinition, ToolResult } from '../types.js';
 import { Sandbox } from '../security/sandbox.js';
 import { confirm } from '../cli/confirm.js';
 import { truncateByBytes } from '../utils/truncate.js';
-import { DEFAULT_CONFIG } from '../config/defaults.js';
+import { runProcess } from '../utils/process.js';
+import type { ToolExecutionContext } from './base.js';
+import type { Config } from '../types.js';
 
 const DEFAULT_TIMEOUT = 120_000; // 120 seconds
 const MAX_OUTPUT_BYTES = 100 * 1024; // 100KB
+const MIN_TIMEOUT = 1_000;
+const MAX_TIMEOUT = 300_000; // 5 minutes
 
 export class ShellExecTool implements Tool {
   definition: ToolDefinition = {
@@ -37,14 +40,23 @@ export class ShellExecTool implements Tool {
 
   constructor(
     private workingDir: string,
+    securityConfig: Config['security'],
     private requireConfirmation: boolean = true,
   ) {
-    this.sandbox = new Sandbox(DEFAULT_CONFIG.security);
+    this.sandbox = new Sandbox(securityConfig);
   }
 
   async execute(input: Record<string, unknown>): Promise<ToolResult> {
+    return this.executeWithContext(input, { depth: 0 });
+  }
+
+  async executeWithContext(
+    input: Record<string, unknown>,
+    ctx: ToolExecutionContext,
+  ): Promise<ToolResult> {
     const command = input['command'] as string;
-    const timeout = (input['timeout'] as number) ?? DEFAULT_TIMEOUT;
+    const rawTimeout = input['timeout'];
+    const timeout = clampTimeout(rawTimeout, DEFAULT_TIMEOUT);
 
     try {
       // Security check
@@ -59,6 +71,7 @@ export class ShellExecTool implements Tool {
       }
 
       if (check === 'needs_confirmation' && this.requireConfirmation) {
+        if (ctx.hookManager) await ctx.hookManager.emitPermissionRequest(input);
         const approved = await confirm(`Allow command: ${command}?`);
         if (!approved) {
           return {
@@ -70,7 +83,7 @@ export class ShellExecTool implements Tool {
       }
 
       // Execute command
-      const result = await this.runCommand(command, timeout);
+      const result = await this.runCommand(command, timeout, ctx.signal);
       return result;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -85,60 +98,66 @@ export class ShellExecTool implements Tool {
   private runCommand(
     command: string,
     timeout: number,
+    signal?: AbortSignal,
   ): Promise<ToolResult> {
     return new Promise((resolve) => {
       const env = this.sandbox.getSanitizedEnv();
-
-      const child = spawn(command, {
-        shell: true,
+      runProcess({
+        command: process.env['SHELL'] || '/bin/sh',
+        args: ['-lc', command],
         cwd: this.workingDir,
         env,
-        timeout,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      child.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      child.stderr?.on('data', (data: Buffer) => {
-        stderr += data.toString();
-      });
-
-      child.on('close', (code) => {
-        let output = stdout;
-        if (stderr) {
-          output += (output ? '\n' : '') + `STDERR:\n${stderr}`;
+        timeoutMs: timeout,
+        signal,
+        detached: true,
+      }).then((result) => {
+        let output = result.stdout;
+        if (result.stderr) {
+          output += (output ? '\n' : '') + `STDERR:\n${result.stderr}`;
         }
-
-        // Truncate large output
         output = truncateByBytes(output, MAX_OUTPUT_BYTES);
 
-        if (code === 0) {
+        if (result.aborted) {
+          resolve({
+            tool_use_id: '',
+            content: `Command aborted by user.\n${output}`.trim(),
+            is_error: true,
+          });
+          return;
+        }
+
+        if (result.timedOut) {
+          resolve({
+            tool_use_id: '',
+            content: `Command timed out after ${timeout}ms.\n${output}`.trim(),
+            is_error: true,
+          });
+          return;
+        }
+
+        if (result.exitCode === 0) {
           resolve({
             tool_use_id: '',
             content: output || '(no output)',
             is_error: false,
           });
-        } else {
-          resolve({
-            tool_use_id: '',
-            content: `Command exited with code ${code}:\n${output}`,
-            is_error: true,
-          });
+          return;
         }
-      });
 
-      child.on('error', (err) => {
         resolve({
           tool_use_id: '',
-          content: `Failed to execute command: ${err.message}`,
+          content: `Command exited with code ${result.exitCode ?? 'unknown'}:\n${output}`.trim(),
           is_error: true,
         });
       });
     });
   }
+}
+
+function clampTimeout(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  const ms = Math.floor(value);
+  if (ms < MIN_TIMEOUT) return MIN_TIMEOUT;
+  if (ms > MAX_TIMEOUT) return MAX_TIMEOUT;
+  return ms;
 }

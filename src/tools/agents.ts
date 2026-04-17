@@ -4,12 +4,14 @@ import type { ToolRegistry } from './registry.js';
 import type { LLMProvider } from '../llm/provider.js';
 import type { ToolExecutionContext } from './base.js';
 import { AgentLoop } from '../agent/loop.js';
+import type { HookManager } from '../hooks/manager.js';
 
 type AgentToolCommonOptions = {
   provider: LLMProvider;
   parentRegistry: ToolRegistry;
   workingDirectory: string;
   onEvent?: (event: AgentEvent) => void;
+  hookManager?: HookManager;
   maxAgentDepth?: number;
   defaultMaxIterations?: number;
   defaultTokenBudget?: number;
@@ -120,9 +122,14 @@ export class AgentTool implements Tool {
       workingDirectory: this.options.workingDirectory,
       depth: childDepth,
       onEvent: (event) => this.options.onEvent?.(event),
+      hookManager: this.options.hookManager,
     });
 
     const effectiveTask = systemPrompt ? `[System Prompt]\n${systemPrompt}\n\n[Task]\n${task}` : task;
+
+    if (this.options.hookManager) {
+      await this.options.hookManager.emitSubagentStart('agent_' + childDepth, 'agent');
+    }
 
     try {
       const messages = await childLoop.run(effectiveTask, [], ctx.signal);
@@ -133,6 +140,10 @@ export class AgentTool implements Tool {
         depth: childDepth,
         data: { mode: 'agent', ok: true },
       });
+
+      if (this.options.hookManager) {
+        await this.options.hookManager.emitSubagentStop('agent_' + childDepth, 'agent');
+      }
 
       return {
         tool_use_id: '',
@@ -147,6 +158,10 @@ export class AgentTool implements Tool {
         depth: childDepth,
         data: { mode: 'agent', ok: false, error: msg },
       });
+
+      if (this.options.hookManager) {
+        await this.options.hookManager.emitSubagentStop('agent_' + childDepth, 'agent');
+      }
 
       return { tool_use_id: '', content: `子 agent 执行失败：${msg}`, is_error: true };
     }
@@ -245,16 +260,28 @@ export class MultiAgentTool implements Tool {
         workingDirectory: this.options.workingDirectory,
         depth: childDepth,
         onEvent: (event) => this.options.onEvent?.(event),
+        hookManager: this.options.hookManager,
       });
 
       const effectiveTask = systemPrompt ? `[System Prompt]\n${systemPrompt}\n\n[Task]\n${task}` : task;
 
+      const subagentId = `multiagent_${childDepth}_${id}`;
+      if (this.options.hookManager) {
+        await this.options.hookManager.emitSubagentStart(subagentId, 'multiagent');
+      }
+
       try {
         const messages = await loop.run(effectiveTask, [], ctx.signal);
         const text = extractFinalAssistantText(messages);
+        if (this.options.hookManager) {
+          await this.options.hookManager.emitSubagentStop(subagentId, 'multiagent');
+        }
         return { id, ok: true, output: text };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (this.options.hookManager) {
+          await this.options.hookManager.emitSubagentStop(subagentId, 'multiagent');
+        }
         return { id, ok: false, error: msg, output: '' };
       }
     });

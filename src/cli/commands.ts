@@ -14,6 +14,7 @@ import type { MemoryIgnoreInput, MemoryKind, MemoryRecord, MemoryScope, MemorySc
 import type { GitOperations } from '../repo/git.js';
 import type { McpManager } from '../mcp/manager.js';
 import type { SkillManager } from '../skills/manager.js';
+import type { HookManager } from '../hooks/manager.js';
 
 const INIT_DEFAULTS = {
   tone: 'balanced',
@@ -37,6 +38,7 @@ export interface CommandContext {
   prompts?: CommandPrompts;
   mcpManager?: McpManager;
   skillManager?: SkillManager;
+  hookManager?: HookManager;
 }
 
 export type CommandResult = 'exit' | 'handled' | 'unknown';
@@ -86,11 +88,21 @@ export const commands: CommandDef[] = [
   {
     name: '/help',
     description: 'Show available commands',
-    handler: async () => {
+    handler: async (_args, ctx) => {
       console.error(chalk.bold('\nAvailable commands:'));
       for (const cmd of commands) {
         console.error(chalk.cyan(`  ${cmd.name.padEnd(12)}`), chalk.gray(`— ${cmd.description}`));
       }
+
+      const skills = ctx.skillManager?.list() ?? [];
+      if (skills.length > 0) {
+        console.error(chalk.bold('\nMounted skills:'));
+        for (const s of skills) {
+          const desc = s.description ? `— ${s.description}` : '';
+          console.error(chalk.cyan(`  /${s.name.padEnd(12)}`), chalk.gray(desc));
+        }
+      }
+
       console.error('');
       return 'handled';
     },
@@ -99,7 +111,9 @@ export const commands: CommandDef[] = [
     name: '/clear',
     description: 'Clear conversation history',
     handler: async (_args, ctx) => {
+      if (ctx.hookManager) await ctx.hookManager.emitSessionEnd('clear');
       ctx.conversation.clear();
+      if (ctx.hookManager) await ctx.hookManager.emitSessionStart('clear');
       console.error(chalk.green('✔ Conversation history cleared.\n'));
       return 'handled';
     },
@@ -124,6 +138,212 @@ export const commands: CommandDef[] = [
         console.error(chalk.red(`✖ Undo failed: ${err instanceof Error ? err.message : String(err)}\n`));
       }
       return 'handled';
+    },
+  },
+  {
+    name: '/checkpoint',
+    description: 'Manage git checkpoints (stash snapshots): list/save/apply/undo',
+    handler: async (args, ctx) => {
+      const command = '/checkpoint';
+      const tokens = tokenizeArgs(args);
+      const action = (tokens[0] ?? '').trim();
+      const rest = tokens.slice(1).join(' ').trim();
+
+      try {
+        const isRepo = await ctx.git.isGitRepo();
+        if (!isRepo) {
+          console.error(chalk.yellow('⚠ Not in a git repository.\n'));
+          return 'handled';
+        }
+
+        if (!action || action === 'help') {
+          console.error(chalk.bold('\nUsage:'));
+          console.error(chalk.cyan('  /checkpoint list [--limit N]'));
+          console.error(chalk.cyan('  /checkpoint save <description>'));
+          console.error(chalk.cyan('  /checkpoint apply <hash>'));
+          console.error(chalk.cyan('  /checkpoint undo'));
+          console.error('');
+          return 'handled';
+        }
+
+        if (action === 'list') {
+          const parsed = parseFlags(rest, new Set(['limit']));
+          const limitRaw = parsed.flags.get('limit') ?? '10';
+          const limit = parsePositiveInteger(limitRaw, '--limit must be a positive integer.');
+          const cps = await ctx.git.listCheckpoints(Math.min(limit, 50));
+          if (cps.length === 0) {
+            console.error(chalk.gray('No checkpoints found.\n'));
+            return 'handled';
+          }
+          console.error(chalk.bold('\nCheckpoints:'));
+          for (const c of cps) {
+            console.error(chalk.cyan(`  ${c.hash}`), chalk.gray(c.date), chalk.gray(c.message));
+          }
+          console.error('');
+          return 'handled';
+        }
+
+        if (action === 'save') {
+          const desc = rest.trim();
+          if (!desc) {
+            throw new CommandUsageError('MISSING_ARGUMENT', 'Usage: /checkpoint save <description>');
+          }
+          const hash = await ctx.git.createCheckpoint(desc);
+          if (!hash) {
+            console.error(chalk.gray('No changes to checkpoint.\n'));
+            return 'handled';
+          }
+          console.error(chalk.green(`✔ Checkpoint saved: ${hash}\n`));
+          return 'handled';
+        }
+
+        if (action === 'apply') {
+          const hash = rest.trim();
+          if (!hash) {
+            throw new CommandUsageError('MISSING_ARGUMENT', 'Usage: /checkpoint apply <hash>');
+          }
+          await ctx.git.revertToCheckpoint(hash);
+          console.error(chalk.green(`✔ Applied checkpoint: ${hash}\n`));
+          return 'handled';
+        }
+
+        if (action === 'undo') {
+          const success = await ctx.git.undoLastCheckpoint();
+          if (success) {
+            console.error(chalk.green('✔ Reverted to previous checkpoint.\n'));
+          } else {
+            console.error(chalk.yellow('⚠ No checkpoint found to undo.\n'));
+          }
+          return 'handled';
+        }
+
+        throw new CommandUsageError('UNKNOWN_ACTION', `Unsupported action: ${action}`);
+      } catch (error) {
+        printCommandError(command, error);
+        console.error('');
+        return 'handled';
+      }
+    },
+  },
+  {
+    name: '/git',
+    description: 'Git helpers: add/commit/restore/stash',
+    handler: async (args, ctx) => {
+      const command = '/git';
+      const tokens = tokenizeArgs(args);
+      const action = (tokens[0] ?? '').trim();
+      const rest = tokens.slice(1).join(' ').trim();
+
+      try {
+        const isRepo = await ctx.git.isGitRepo();
+        if (!isRepo) {
+          console.error(chalk.yellow('⚠ Not in a git repository.\n'));
+          return 'handled';
+        }
+
+        if (!action || action === 'help') {
+          console.error(chalk.bold('\nUsage:'));
+          console.error(chalk.cyan('  /git add [-A] [-- <paths...>]'));
+          console.error(chalk.cyan('  /git commit -m "<message>"'));
+          console.error(chalk.cyan('  /git restore [--staged] -- <paths...>'));
+          console.error(chalk.cyan('  /git stash push -m "<message>" [-u]'));
+          console.error(chalk.cyan('  /git stash list [--limit N]'));
+          console.error(chalk.cyan('  /git stash apply <ref|hash>'));
+          console.error(chalk.cyan('  /git stash pop [<ref>]'));
+          console.error('');
+          return 'handled';
+        }
+
+        if (action === 'add') {
+          const raw = tokenizeArgs(rest);
+          if (raw.includes('-A')) {
+            await ctx.git.addAll();
+            console.error(chalk.green('✔ git add -A\n'));
+            return 'handled';
+          }
+          const dashDash = raw.indexOf('--');
+          const paths = dashDash === -1 ? raw : raw.slice(dashDash + 1);
+          if (paths.length === 0) {
+            throw new CommandUsageError('MISSING_ARGUMENT', 'Usage: /git add -A OR /git add -- <paths...>');
+          }
+          await ctx.git.addPaths(paths);
+          console.error(chalk.green(`✔ git add ${paths.join(' ')}\n`));
+          return 'handled';
+        }
+
+        if (action === 'commit') {
+          // Accept: /git commit -m "msg"
+          const parsed = parseTokensToFlags(tokenizeArgs(rest), new Set(['m']));
+          ensureNoPositionals(parsed.positionals);
+          const message = normalizeRequiredValue(requireFlag(parsed.flags, 'm', '-m is required.'), '-m must not be empty.');
+          const hash = await ctx.git.commit(message);
+          console.error(chalk.green(`✔ committed: ${hash}\n`));
+          return 'handled';
+        }
+
+        if (action === 'restore') {
+          const raw = tokenizeArgs(rest);
+          const staged = raw.includes('--staged');
+          const dashDash = raw.indexOf('--');
+          const paths = dashDash === -1 ? [] : raw.slice(dashDash + 1);
+          if (paths.length === 0) {
+            throw new CommandUsageError('MISSING_ARGUMENT', 'Usage: /git restore [--staged] -- <paths...>');
+          }
+          await ctx.git.restore(paths, { staged });
+          console.error(chalk.green(`✔ restored: ${paths.join(' ')}\n`));
+          return 'handled';
+        }
+
+        if (action === 'stash') {
+          const sub = (tokenizeArgs(rest)[0] ?? '').trim();
+          const subRest = tokenizeArgs(rest).slice(1).join(' ');
+          if (!sub || sub === 'help') {
+            throw new CommandUsageError('MISSING_ARGUMENT', 'Usage: /git stash <push|list|apply|pop> ...');
+          }
+
+          if (sub === 'push') {
+            const raw = tokenizeArgs(subRest);
+            const includeUntracked = raw.includes('-u');
+            const parsed = parseTokensToFlags(raw, new Set(['m']));
+            const message = normalizeOptionalValue(parsed.flags.get('m') ?? 'stash', 'stash');
+            await ctx.git.stashPush(message, { includeUntracked });
+            console.error(chalk.green('✔ stashed.\n'));
+            return 'handled';
+          }
+
+          if (sub === 'list') {
+            const parsed = parseFlags(subRest, new Set(['limit']));
+            const limitRaw = parsed.flags.get('limit') ?? '20';
+            const limit = parsePositiveInteger(limitRaw, '--limit must be a positive integer.');
+            const out = await ctx.git.stashList(limit);
+            console.error('\n' + (out.trim() ? out : chalk.gray('(empty)')) + '\n');
+            return 'handled';
+          }
+
+          if (sub === 'apply') {
+            const ref = subRest.trim();
+            if (!ref) throw new CommandUsageError('MISSING_ARGUMENT', 'Usage: /git stash apply <ref|hash>');
+            await ctx.git.stashApply(ref);
+            console.error(chalk.green(`✔ applied stash: ${ref}\n`));
+            return 'handled';
+          }
+
+          if (sub === 'pop') {
+            const ref = subRest.trim() || undefined;
+            await ctx.git.stashPop(ref);
+            console.error(chalk.green('✔ stash popped.\n'));
+            return 'handled';
+          }
+
+          throw new CommandUsageError('UNKNOWN_ACTION', `Unsupported stash action: ${sub}`);
+        }
+
+        throw new CommandUsageError('UNKNOWN_ACTION', `Unsupported action: ${action}`);
+      } catch (error) {
+        printCommandError(command, error);
+        console.error('');
+        return 'handled';
+      }
     },
   },
   {
@@ -196,8 +416,10 @@ export const commands: CommandDef[] = [
         const oldMessages = messages.slice(0, -4);
         const recentMessages = messages.slice(-4);
 
+        if (ctx.hookManager) await ctx.hookManager.emitPreCompact();
         const summary = await summarizeWithLLM(oldMessages, ctx.provider);
         ctx.conversation.compact(summary, recentMessages);
+        if (ctx.hookManager) await ctx.hookManager.emitPostCompact(summary);
 
         const tokensAfter = ctx.conversation.estimateTokens();
         console.error(
@@ -205,11 +427,14 @@ export const commands: CommandDef[] = [
             chalk.gray(`(saved ${tokensBefore - tokensAfter})\n`),
         );
       } catch (err) {
+        if (ctx.hookManager) await ctx.hookManager.emitPreCompact();
         const result = trimToFit(messages, Math.floor(tokensBefore * 0.5), 3);
         if (result.summary) {
           ctx.conversation.compact(result.summary, result.messages);
+          if (ctx.hookManager) await ctx.hookManager.emitPostCompact(result.summary);
           console.error(chalk.green('✔ Compacted (local summary).\n'));
         } else {
+          if (ctx.hookManager) await ctx.hookManager.emitPostCompact('Compact failed');
           console.error(chalk.red(`✖ Compact failed: ${err instanceof Error ? err.message : String(err)}\n`));
         }
       }

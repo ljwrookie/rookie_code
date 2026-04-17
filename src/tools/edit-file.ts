@@ -4,6 +4,9 @@ import type { Tool } from './base.js';
 import type { ToolDefinition, ToolResult } from '../types.js';
 import { searchReplace } from '../editor/search-replace.js';
 import { formatDiff } from '../editor/diff-display.js';
+import { resolvePathForRead, resolvePathForWrite } from '../security/path-utils.js';
+import { confirm } from '../cli/confirm.js';
+import { assessTextChangeRisk } from '../changes/risk.js';
 
 export class EditFileTool implements Tool {
   definition: ToolDefinition = {
@@ -36,7 +39,14 @@ export class EditFileTool implements Tool {
     },
   };
 
-  constructor(private workingDir: string) {}
+  constructor(
+    private workingDir: string,
+    private options: {
+      confirmFuzzyEdits: boolean;
+      confirmHighRiskEdits: boolean;
+      maxAutoEditLines: number;
+    },
+  ) {}
 
   async execute(input: Record<string, unknown>): Promise<ToolResult> {
     const filePath = input['path'] as string;
@@ -44,10 +54,9 @@ export class EditFileTool implements Tool {
     const newString = input['new_string'] as string;
 
     try {
-      const resolved = this.resolvePath(filePath);
-
       // Case: Create new file (old_string is empty)
       if (!oldString) {
+        const resolved = await resolvePathForWrite(this.workingDir, filePath);
         const exists = await fileExists(resolved);
         if (exists) {
           return {
@@ -68,6 +77,7 @@ export class EditFileTool implements Tool {
       }
 
       // Case: Edit existing file using search-replace engine
+      const resolved = await resolvePathForRead(this.workingDir, filePath);
       const content = await fs.readFile(resolved, 'utf-8');
       const result = searchReplace({
         content,
@@ -107,14 +117,71 @@ export class EditFileTool implements Tool {
         };
       }
 
-      // Success — write the new content
-      await fs.writeFile(resolved, result.newContent!, 'utf-8');
-
       // Generate diff for display
       const diff = formatDiff(content, result.newContent!, {
         filePath,
         contextLines: 3,
       });
+
+      // If fuzzy match was used, require confirmation (safe default).
+      if (result.usedFuzzyMatch && this.options.confirmFuzzyEdits) {
+        if (!process.stdin.isTTY) {
+          return {
+            tool_use_id: '',
+            content:
+              `Fuzzy match detected for ${filePath}, but confirmation requires an interactive TTY.\n` +
+              `Re-run in an interactive session or disable confirmation.\n\n` +
+              stripAnsi(diff),
+            is_error: true,
+          };
+        }
+
+        console.error(diff);
+        const approved = await confirm(`Apply fuzzy edit to ${filePath}?`);
+        if (!approved) {
+          return {
+            tool_use_id: '',
+            content: `User rejected fuzzy edit for ${filePath}.`,
+            is_error: true,
+          };
+        }
+      }
+
+      // High-risk changes also require confirmation.
+      if (this.options.confirmHighRiskEdits) {
+        const risk = assessTextChangeRisk({
+          filePath,
+          oldContent: content,
+          newContent: result.newContent!,
+          maxAutoEditLines: this.options.maxAutoEditLines,
+        });
+        if (risk.needsConfirmation) {
+          if (!process.stdin.isTTY) {
+            return {
+              tool_use_id: '',
+              content:
+                `High-risk edit detected for ${filePath}, but confirmation requires an interactive TTY.\n` +
+                `Reasons: ${risk.reasons.join(', ')}\n\n` +
+                stripAnsi(diff),
+              is_error: true,
+            };
+          }
+          console.error(diff);
+          const approved = await confirm(
+            `Apply high-risk edit to ${filePath}? (${risk.reasons.join(', ')})`,
+          );
+          if (!approved) {
+            return {
+              tool_use_id: '',
+              content: `User rejected high-risk edit for ${filePath}.`,
+              is_error: true,
+            };
+          }
+        }
+      }
+
+      // Success — write the new content
+      await fs.writeFile(resolved, result.newContent!, 'utf-8');
 
       // Strip ANSI codes for the tool result (LLM doesn't need colors)
       const plainDiff = stripAnsi(diff);
@@ -138,16 +205,6 @@ export class EditFileTool implements Tool {
         is_error: true,
       };
     }
-  }
-
-  private resolvePath(filePath: string): string {
-    const resolved = path.resolve(this.workingDir, filePath);
-    if (!resolved.startsWith(this.workingDir)) {
-      throw new Error(
-        `Path "${filePath}" resolves outside the working directory. Access denied.`,
-      );
-    }
-    return resolved;
   }
 }
 

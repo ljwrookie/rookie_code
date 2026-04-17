@@ -257,7 +257,7 @@ describe('AgentLoop', () => {
     const toolResultMsg = messages[2]!;
     const blocks = toolResultMsg.content as Array<{ type: string; content: string; is_error: boolean }>;
     expect(blocks[0]!.is_error).toBe(true);
-    expect(blocks[0]!.content).toContain('Missing required parameter');
+    expect(blocks[0]!.content).toContain('Tool input validation failed');
     expect(blocks[0]!.content).toContain('path');
   });
 

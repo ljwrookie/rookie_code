@@ -1,10 +1,14 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Tool } from './base.js';
 import type { ToolDefinition, ToolResult } from '../types.js';
+import { resolvePathForRead } from '../security/path-utils.js';
+import { runProcess } from '../utils/process.js';
+import type { ToolExecutionContext } from './base.js';
 
 const MAX_ENTRIES = 500;
+const DEFAULT_GIT_TIMEOUT_MS = 10_000;
+const MAX_GIT_TIMEOUT_MS = 30_000;
 
 export class ListFilesTool implements Tool {
   definition: ToolDefinition = {
@@ -27,6 +31,10 @@ export class ListFilesTool implements Tool {
           type: 'string',
           description: 'Glob pattern to filter files (e.g., "*.ts")',
         },
+        timeout_ms: {
+          type: 'number',
+          description: `Timeout for git ls-files (ms). Defaults to ${DEFAULT_GIT_TIMEOUT_MS}. Max ${MAX_GIT_TIMEOUT_MS}.`,
+        },
       },
     },
   };
@@ -34,15 +42,22 @@ export class ListFilesTool implements Tool {
   constructor(private workingDir: string) {}
 
   async execute(input: Record<string, unknown>): Promise<ToolResult> {
+    return this.executeWithContext(input, { depth: 0 });
+  }
+
+  async executeWithContext(input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<ToolResult> {
     const listPath = (input['path'] as string) ?? '.';
     const recursive = (input['recursive'] as boolean) ?? false;
     const pattern = input['pattern'] as string | undefined;
+    const timeoutMs = clampTimeoutMs(input['timeout_ms'], DEFAULT_GIT_TIMEOUT_MS);
 
     try {
-      const resolvedPath = path.resolve(this.workingDir, listPath);
+      const resolvedPath = listPath === '.'
+        ? this.workingDir
+        : await resolvePathForRead(this.workingDir, listPath);
 
       // Try git ls-files first (respects .gitignore)
-      const gitResult = await this.tryGitLsFiles(resolvedPath, recursive, pattern).catch(
+      const gitResult = await this.tryGitLsFiles(resolvedPath, recursive, pattern, timeoutMs, ctx.signal).catch(
         () => null,
       );
       if (gitResult) return gitResult;
@@ -63,6 +78,8 @@ export class ListFilesTool implements Tool {
     dirPath: string,
     recursive: boolean,
     pattern: string | undefined,
+    timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<ToolResult> {
     return new Promise((resolve, reject) => {
       const args = ['ls-files', '--cached', '--others', '--exclude-standard'];
@@ -70,18 +87,22 @@ export class ListFilesTool implements Tool {
         // Only top-level files in the given directory
       }
 
-      const child = spawn('git', args, {
+      runProcess({
+        command: 'git',
+        args,
         cwd: dirPath,
-        timeout: 10_000,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      let stdout = '';
-      child.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      child.on('close', (code) => {
+        timeoutMs,
+        signal,
+      }).then(({ stdout, exitCode, timedOut, aborted }) => {
+        if (aborted) {
+          reject(new Error('git ls-files aborted'));
+          return;
+        }
+        if (timedOut) {
+          reject(new Error('git ls-files timed out'));
+          return;
+        }
+        const code = exitCode;
         if (code !== 0) {
           reject(new Error('Not a git repository'));
           return;
@@ -121,10 +142,6 @@ export class ListFilesTool implements Tool {
           content: `${total} files:\n\n${output}${truncNote}`,
           is_error: false,
         });
-      });
-
-      child.on('error', () => {
-        reject(new Error('git not found'));
       });
     });
   }
@@ -181,4 +198,11 @@ export class ListFilesTool implements Tool {
       .replace(/\?/g, '.');
     return new RegExp(escaped);
   }
+}
+
+function clampTimeoutMs(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  const ms = Math.floor(value);
+  if (ms < 1_000) return 1_000;
+  return Math.min(ms, MAX_GIT_TIMEOUT_MS);
 }

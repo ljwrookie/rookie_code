@@ -65,10 +65,10 @@ describe('GitOperations', () => {
     expect(hash).toBeTruthy();
     expect(hash.length).toBeGreaterThanOrEqual(7);
 
-    // Verify the commit message
-    const log = execSync('git log -1 --format=%s', { cwd: tmpDir }).toString().trim();
-    expect(log).toContain('[rookie-code checkpoint]');
-    expect(log).toContain('before edit: file.txt');
+    // Verify stash message
+    const list = execSync('git stash list -1', { cwd: tmpDir }).toString().trim();
+    expect(list).toContain('[rookie-code checkpoint]');
+    expect(list).toContain('before edit: file.txt');
   });
 
   it('createCheckpoint should return empty string when no changes', async () => {
@@ -90,14 +90,12 @@ describe('GitOperations', () => {
   });
 
   it('undoLastCheckpoint should revert the latest checkpoint', async () => {
+    // Create a checkpoint of the current working tree (before agent run)
     await fs.writeFile(path.join(tmpDir, 'before.txt'), 'before\n');
-    run('git add -A && git commit -m "normal commit"');
+    await git.createCheckpoint('before agent run');
 
+    // Simulate agent creating a new file after the checkpoint
     await fs.writeFile(path.join(tmpDir, 'after.txt'), 'after\n');
-    await git.createCheckpoint('edit after');
-
-    // after.txt should exist
-    expect(await fileExists(path.join(tmpDir, 'after.txt'))).toBe(true);
 
     // Undo
     const undone = await git.undoLastCheckpoint();

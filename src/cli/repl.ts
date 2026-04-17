@@ -11,6 +11,26 @@ import { Renderer } from './renderer.js';
 import { executeCommand, commands, type CommandContext } from './commands.js';
 import type { McpManager } from '../mcp/manager.js';
 import type { SkillManager } from '../skills/manager.js';
+import type { HookManager } from '../hooks/manager.js';
+import type { SessionLogger } from '../observability/session-logger.js';
+
+type CompletionEntry = { name: string; description: string };
+
+let completionEntries: CompletionEntry[] = commands.map((c) => ({
+  name: c.name,
+  description: c.description,
+}));
+
+function refreshCompletionEntries(skillManager?: SkillManager): void {
+  const base: CompletionEntry[] = commands.map((c) => ({ name: c.name, description: c.description }));
+  const skills = skillManager?.list() ?? [];
+  const skillEntries: CompletionEntry[] = skills.map((s) => ({
+    name: `/${s.name}`,
+    description: s.description ? `Skill — ${s.description}` : 'Skill',
+  }));
+
+  completionEntries = [...base, ...skillEntries];
+}
 
 export interface REPLOptions {
   provider: LLMProvider;
@@ -19,6 +39,8 @@ export interface REPLOptions {
   renderer?: Renderer;
   mcpManager?: McpManager;
   skillManager?: SkillManager;
+  hookManager?: HookManager;
+  sessionLogger?: SessionLogger;
 }
 
 const replPrompt = createPrompt<string, { message: string }>((config, done) => {
@@ -29,7 +51,7 @@ const replPrompt = createPrompt<string, { message: string }>((config, done) => {
   const isCommand = value.startsWith('/');
   const hasSpace = value.includes(' ');
   const suggestions = (isCommand && !hasSpace)
-    ? commands.filter(c => c.name.startsWith(value))
+    ? completionEntries.filter(c => c.name.startsWith(value))
     : [];
 
   useKeypress((key, rl) => {
@@ -104,6 +126,7 @@ export class REPL {
   private renderer: Renderer;
   private abortController: AbortController | null = null;
   private commandCtx: CommandContext;
+  private sessionLogger?: SessionLogger;
 
   constructor(
     private agentLoop: AgentLoop,
@@ -120,7 +143,12 @@ export class REPL {
       memoryManager: options.memoryManager,
       mcpManager: options.mcpManager,
       skillManager: options.skillManager,
+      hookManager: options.hookManager,
     };
+
+    this.sessionLogger = options.sessionLogger;
+
+    refreshCompletionEntries(options.skillManager);
   }
 
   private buildSkillInvocation(input: string): string | null {
@@ -155,6 +183,9 @@ export class REPL {
 
   async start(): Promise<void> {
     this.renderer.renderWelcome();
+    if (this.commandCtx.hookManager) {
+      await this.commandCtx.hookManager.emitSessionStart('startup');
+    }
 
     // Handle Ctrl+C: abort current request, don't exit
     process.on('SIGINT', () => {
@@ -165,6 +196,9 @@ export class REPL {
         console.error(chalk.yellow('\n⚠ Request cancelled.'));
       } else {
         // No active request — exit
+        if (this.commandCtx.hookManager) {
+          this.commandCtx.hookManager.emitSessionEnd('other').catch(() => {});
+        }
         console.error(chalk.gray('\nBye!'));
         process.exit(0);
       }
@@ -174,22 +208,37 @@ export class REPL {
       let userInput: string;
       try {
         const line = await replPrompt({
-          message: chalk.green.bold('rookie ') + chalk.cyan.bold('❯ '),
+          message: chalk.cyan.bold('❯ '),
         });
         userInput = line.trim();
       } catch (err: any) {
         if (err.name === 'ExitPromptError') {
+          if (this.commandCtx.hookManager) {
+            await this.commandCtx.hookManager.emitSessionEnd('prompt_input_exit');
+          }
           console.error(chalk.gray('\nBye!'));
           break;
+        }
+        if (this.commandCtx.hookManager) {
+          await this.commandCtx.hookManager.emitSessionEnd('other');
         }
         break;
       }
 
       if (!userInput) continue;
+      await this.sessionLogger?.log('user_input', { input: userInput });
 
       // Handle slash commands
       if (userInput.startsWith('/')) {
-        const result = await executeCommand(userInput, this.commandCtx);
+        const hooks = this.commandCtx.hookManager;
+        const before = hooks ? await hooks.emitBeforeExecuteCommand(userInput) : { input: userInput, bypass: false };
+        userInput = before.input;
+
+        const result = before.bypass ? 'handled' : await executeCommand(userInput, this.commandCtx);
+        if (hooks) {
+          await hooks.emitAfterExecuteCommand(userInput, result);
+        }
+        await this.sessionLogger?.log('slash_command', { input: userInput, result });
         if (result === 'exit') {
           console.error(chalk.gray('Bye!'));
           break;
@@ -242,11 +291,18 @@ export class REPL {
         this.renderer.startThinking();
         const history = this.conversation.getMessages();
         const turn = this.commandCtx.memoryManager?.advanceTurn();
+        const hooks = this.commandCtx.hookManager;
+        if (hooks) {
+          fullInput = await hooks.emitBeforeAgentRun(fullInput);
+        }
         const updatedHistory = await this.agentLoop.run(
           fullInput,
           history,
           this.abortController.signal,
         );
+        if (hooks) {
+          await hooks.emitAfterAgentRun(fullInput);
+        }
 
         // Update conversation with new messages
         // The agent returns the full history including the user message and responses

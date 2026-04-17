@@ -99,8 +99,8 @@ describe('Agent E2E (mock)', () => {
 
     const registry = new ToolRegistry();
     registry.register(new ReadFileTool(tmpDir));
-    registry.register(new EditFileTool(tmpDir));
-    registry.register(new WriteFileTool(tmpDir));
+    registry.register(new EditFileTool(tmpDir, { confirmFuzzyEdits: false, confirmHighRiskEdits: false, maxAutoEditLines: 100 }));
+    registry.register(new WriteFileTool(tmpDir, { confirmHighRiskEdits: false, maxAutoEditLines: 100 }));
 
     const loop = new AgentLoop(provider, registry, {
       maxIterations: 10,
@@ -162,7 +162,7 @@ describe('Agent E2E (mock)', () => {
 
     const registry = new ToolRegistry();
     registry.register(new ReadFileTool(tmpDir));
-    registry.register(new EditFileTool(tmpDir));
+    registry.register(new EditFileTool(tmpDir, { confirmFuzzyEdits: false, confirmHighRiskEdits: false, maxAutoEditLines: 100 }));
 
     const loop = new AgentLoop(provider, registry, {
       maxIterations: 10,

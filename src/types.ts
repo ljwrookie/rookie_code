@@ -75,6 +75,26 @@ export interface Config {
     blockedPaths: string[];
     requireConfirmation: boolean;
   };
+  editor: {
+    /** Require user confirmation before applying fuzzy edits (safe default). */
+    confirmFuzzyEdits: boolean;
+    /** Confirm high-risk edits/creates even when not fuzzy (recommended). */
+    confirmHighRiskEdits: boolean;
+    /** If a single change touches more than this many lines, require confirmation. */
+    maxAutoEditLines: number;
+  };
+  repoContext: {
+    /** Inject a lightweight repo overview into system prompt. */
+    enabled: boolean;
+    /** Maximum number of files to include in the repo overview. */
+    maxFiles: number;
+  };
+  observability: {
+    /** Write debug session logs to disk (JSONL). */
+    enabled: boolean;
+    /** Optional directory for logs. Defaults to <cwd>/.rookie-code/logs */
+    logDir?: string;
+  };
 }
 
 // --- Agent Types ---
@@ -94,7 +114,9 @@ export interface AgentEvent {
     | 'response'
     | 'error'
     | 'agent_start'
-    | 'agent_end';
+    | 'agent_end'
+    | 'llm_usage'
+    | 'notification';
   data: unknown;
   /** Agent nesting depth. Top-level agent = 0. */
   depth?: number;

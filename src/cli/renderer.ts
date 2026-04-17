@@ -64,6 +64,18 @@ export class Renderer {
     this.startThinking();
   }
 
+  /** Render a notification */
+  renderNotification(title: string, message: string, notification_type: string): void {
+    this.endStream();
+    const typeColor = notification_type === 'error' ? chalk.red : notification_type === 'warning' ? chalk.yellow : chalk.cyan;
+    console.error(
+      typeColor('🔔 ') +
+      typeColor.bold(title) +
+      chalk.gray(` ${message}`),
+    );
+    this.startThinking();
+  }
+
   /** Render a tool result */
   renderToolResult(name: string, result: ToolResult, depth: number = 0): void {
     this.stopThinking();
@@ -166,6 +178,16 @@ export class Renderer {
 
       case 'error':
         this.renderError(event.data as Error);
+        break;
+      
+      case 'notification': {
+        const notif = event.data as { title: string; message: string; notification_type: string };
+        this.renderNotification(notif.title, notif.message, notif.notification_type);
+        break;
+      }
+
+      case 'llm_usage':
+        // no-op (used by debug logging)
         break;
     }
   }

@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import type { Tool } from './base.js';
 import type { ToolDefinition, ToolResult } from '../types.js';
 import { addLineNumbers, truncateByLines } from '../utils/truncate.js';
+import { resolvePathForRead } from '../security/path-utils.js';
 
 const MAX_LINES = 2000;
 
@@ -52,7 +52,7 @@ export class ReadFileTool implements Tool {
     const limit = (input['limit'] as number) ?? MAX_LINES;
 
     try {
-      const resolved = this.resolvePath(filePath);
+      const resolved = await resolvePathForRead(this.workingDir, filePath);
       const buffer = await fs.readFile(resolved);
 
       if (isBinary(buffer)) {
@@ -86,18 +86,5 @@ export class ReadFileTool implements Tool {
       const msg = err instanceof Error ? err.message : String(err);
       return { tool_use_id: '', content: `Error reading file: ${msg}`, is_error: true };
     }
-  }
-
-  private resolvePath(filePath: string): string {
-    const resolved = path.resolve(this.workingDir, filePath);
-
-    // Security: prevent path traversal outside working directory
-    if (!resolved.startsWith(this.workingDir)) {
-      throw new Error(
-        `Path "${filePath}" resolves outside the working directory. Access denied.`,
-      );
-    }
-
-    return resolved;
   }
 }

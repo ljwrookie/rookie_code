@@ -10,7 +10,11 @@ describe('EditFileTool', () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rookie-test-'));
-    tool = new EditFileTool(tmpDir);
+    tool = new EditFileTool(tmpDir, {
+      confirmFuzzyEdits: false,
+      confirmHighRiskEdits: false,
+      maxAutoEditLines: 200,
+    });
   });
 
   afterEach(async () => {

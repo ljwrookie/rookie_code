@@ -49,4 +49,16 @@ export const DEFAULT_CONFIG: Config = {
     ],
     requireConfirmation: true,
   },
+  editor: {
+    confirmFuzzyEdits: true,
+    confirmHighRiskEdits: true,
+    maxAutoEditLines: 200,
+  },
+  repoContext: {
+    enabled: true,
+    maxFiles: 120,
+  },
+  observability: {
+    enabled: false,
+  },
 };

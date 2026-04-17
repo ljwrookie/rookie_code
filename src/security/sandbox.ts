@@ -9,9 +9,18 @@ const DANGEROUS_PATTERNS = [
   /;\s*rm\s/,        // ; rm
   /&&\s*rm\s/,       // && rm
   /\|\s*rm\s/,       // | rm
+  /\b(curl|wget)\b[\s\S]*\|\s*(sh|bash)\b/i, // curl/wget | sh
   />\s*\/dev\//,     // redirect to /dev/
   /rm\s+-rf\s+\//,   // rm -rf /
 ];
+
+/** Whitelisted but still high-risk commands that should generally require confirmation. */
+const HIGH_RISK_COMMANDS = new Set([
+  // Package managers frequently change disk state and may execute lifecycle scripts.
+  'npm',
+  'pnpm',
+  'npx',
+]);
 
 /** Environment variables to strip from child processes */
 const SENSITIVE_ENV_VARS = [
@@ -49,6 +58,9 @@ export class Sandbox {
 
     // Check whitelist
     if (this.allowedCommands.has(executable)) {
+      if (HIGH_RISK_COMMANDS.has(executable)) {
+        return 'needs_confirmation';
+      }
       return 'allowed';
     }
 
