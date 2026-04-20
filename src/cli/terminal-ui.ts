@@ -340,8 +340,11 @@ export class TerminalUI {
           continue;
         }
 
-        // Unrecognized ESC sequence: drop ESC to avoid garbage.
-        this.inputBuf = this.inputBuf.slice(1);
+        // Unrecognized ESC sequence: consume the whole control sequence to avoid
+        // leaking bytes like O/B/A into the input buffer on trackpad scroll.
+        const unknownEsc = this.inputBuf.match(/^\x1b(?:\[[0-9;?]*[ -/]*[@-~]|O.|.)/);
+        if (unknownEsc) this.inputBuf = this.inputBuf.slice(unknownEsc[0].length);
+        else this.inputBuf = this.inputBuf.slice(1);
         continue;
       }
 
