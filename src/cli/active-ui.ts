@@ -20,6 +20,7 @@ export async function withUiPaused<T>(fn: () => Promise<T>): Promise<T> {
     return await fn();
   } finally {
     resume();
+    // Some prompt libs pause stdin; ensure it is flowing so the process doesn't exit.
+    if (process.stdin.isTTY) process.stdin.resume();
   }
 }
-

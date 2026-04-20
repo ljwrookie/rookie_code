@@ -124,13 +124,21 @@ export class TerminalUI {
   resume(): void {
     if (!this.paused) return;
     this.paused = false;
-    if (process.stdin.isTTY) process.stdin.setRawMode(true);
+    // Some prompt libraries (e.g. @inquirer/prompts) pause stdin when they finish.
+    // A paused stdin does not keep the event loop alive, so the CLI may exit right
+    // after the prompt completes. Ensure stdin is flowing again.
+    if (process.stdin.isTTY) {
+      process.stdin.resume();
+      process.stdin.setRawMode(true);
+    }
     this.scheduleRender();
   }
 
   suspendForPrompt(): void {
     if (!this.started) return;
     this.pause();
+    // Prompts expect cooked mode; also reduces interference with key handling.
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
     this.clearScreen();
     process.stdout.write(ANSI.home + ANSI.showCursor + ANSI.wrapOn);
   }
@@ -278,6 +286,33 @@ export class TerminalUI {
 
       // Escape sequences (arrows, page up/down, delete, alt+arrows)
       if (this.inputBuf.startsWith('\x1b')) {
+        // Arrow keys in "application cursor" mode: ESC O A/B/C/D (common in some terminals)
+        const appArrow = this.inputBuf.match(/^\x1bO([ABCD])/);
+        if (appArrow) {
+          const dir = appArrow[1];
+          if (dir === 'A') this.scrollOffset = Math.min(this.scrollOffset + 2, 10_000);
+          if (dir === 'B') this.scrollOffset = Math.max(this.scrollOffset - 2, 0);
+          if (dir === 'C') this.cursor = Math.min(this.inputValue.length, this.cursor + 1);
+          if (dir === 'D') this.cursor = Math.max(0, this.cursor - 1);
+          this.inputBuf = this.inputBuf.slice(appArrow[0].length);
+          this.scheduleRender();
+          continue;
+        }
+
+        // Modified arrow keys: ESC [ 1 ; <mod> A/B/C/D (e.g. Shift/Ctrl)
+        // We treat modified Left/Right as normal cursor moves, and Up/Down as scroll.
+        const modArrow = this.inputBuf.match(/^\x1b\[(?:1;(\d+))([ABCD])/);
+        if (modArrow) {
+          const dir = modArrow[2];
+          if (dir === 'A') this.scrollOffset = Math.min(this.scrollOffset + 2, 10_000);
+          if (dir === 'B') this.scrollOffset = Math.max(this.scrollOffset - 2, 0);
+          if (dir === 'C') this.cursor = Math.min(this.inputValue.length, this.cursor + 1);
+          if (dir === 'D') this.cursor = Math.max(0, this.cursor - 1);
+          this.inputBuf = this.inputBuf.slice(modArrow[0].length);
+          this.scheduleRender();
+          continue;
+        }
+
         // Alt+Up/Down: ESC [ 1 ; 3 A/B
         const altArrow = this.inputBuf.match(/^\x1b\[(\d+);3([ABCD])/);
         if (altArrow) {
@@ -465,12 +500,15 @@ export class TerminalUI {
     // We leave the last terminal column unused.
     const printCols = Math.max(20, cols - 1);
     const headerHeight = 0;
-    const boxLines = 3; // top/middle/bottom
     const footerLines = 2;
     const completions = this.getCompletions();
     const completionLines = Math.min(6, completions.length);
     const pendingView = this.renderPendingInputs(printCols);
     const pendingLines = pendingView.length;
+    const boxWidth = Math.max(20, printCols);
+    const box = this.renderInputBox(boxWidth);
+    const boxLines = box.length;
+
     const reserved = headerHeight + boxLines + footerLines + completionLines + pendingLines;
     const outHeight = Math.max(3, rows - reserved);
 
@@ -489,10 +527,6 @@ export class TerminalUI {
 
     const outputLines = this.buildOutputLines(printCols, outHeight);
 
-    // Make room for the right-side shadow column so it does not wrap.
-    // Box width equals printed columns (renderInputBox internally adds 1 right-shadow col but stays within width).
-    const boxWidth = Math.max(20, printCols);
-    const box = this.renderInputBox(boxWidth);
     const completionView = this.renderCompletions(printCols, completions);
 
     const screen: string[] = [];
@@ -511,7 +545,7 @@ export class TerminalUI {
     process.stdout.write(screen.join('\n'));
 
     // Place cursor inside the input box content line.
-    const cursorPos = this.getCursorPositionInBox(printCols, rows, boxWidth, completionLines);
+    const cursorPos = this.getCursorPositionInBox(printCols, rows, boxWidth, completionLines, boxLines);
     process.stdout.write(`\x1b[${cursorPos.row};${cursorPos.col}H`);
     process.stdout.write(ANSI.showCursor);
   }
@@ -541,17 +575,19 @@ export class TerminalUI {
     const top = '╭' + '─'.repeat(inner) + '╮';
     const bottom = '╰' + '─'.repeat(inner) + '╯';
     const prompt = '> ';
-    const { display, cursorDisplayIndex } = this.toDisplayString(this.inputValue, this.cursor);
-    const available = Math.max(0, inner - prompt.length);
 
+    const inputLayout = this.buildInputLayout(inner, prompt, 6);
+    const lines: string[] = [top];
 
-    // Horizontal scrolling: keep cursor visible.
-    const start = Math.max(0, cursorDisplayIndex - Math.floor(available * 0.6));
-    const view = sliceByColumns(display, start, available);
-    const pad = ' '.repeat(Math.max(0, available - stringWidth(view)));
+    for (let i = 0; i < inputLayout.visibleLines.length; i++) {
+      const line = inputLayout.visibleLines[i]!;
+      const prefix = i === 0 ? prompt : ' '.repeat(prompt.length);
+      const pad = ' '.repeat(Math.max(0, inner - stringWidth(prefix + line)));
+      lines.push('│' + prefix + line + pad + '│');
+    }
 
-    const mid = '│' + (prompt + view + pad).slice(0, inner) + '│';
-    return [top, mid, bottom];
+    lines.push(bottom);
+    return lines;
   }
 
   private getCompletions(): CompletionItem[] {
@@ -626,41 +662,78 @@ export class TerminalUI {
     if (this.completionScroll > maxScroll) this.completionScroll = maxScroll;
   }
 
-  private getCursorPositionInBox(cols: number, rows: number, boxWidth: number, completionLines: number): { row: number; col: number } {
+  private getCursorPositionInBox(cols: number, rows: number, boxWidth: number, completionLines: number, boxLines: number): { row: number; col: number } {
     // Anchor cursor from the bottom so it stays correct even if some terminals wrap lines unexpectedly.
-    // Layout from bottom: footer(2) + box(3) + completions(N). Cursor should be on the box "middle" line.
     const footerLines = 2;
-    const boxLines = 3;
-    const row = rows - footerLines - boxLines - completionLines + 2;
-
-    const inner = Math.max(20, boxWidth) - 2;
-    const prompt = '> ';
-    const { cursorDisplayIndex } = this.toDisplayString(this.inputValue, this.cursor);
-    const available = Math.max(0, inner - prompt.length);
-    const start = Math.max(0, cursorDisplayIndex - Math.floor(available * 0.6));
-    const within = Math.min(Math.max(0, cursorDisplayIndex - start), Math.max(0, available - 1));
-    // col: 1-based. "│" at col 1, then prompt starts at col 2.
-    const col = 2 + prompt.length + within;
+    const inputLayout = this.buildInputLayout(Math.max(20, boxWidth) - 2, '> ', 6);
+    const row = rows - footerLines - boxLines - completionLines + 1 + inputLayout.cursorRow;
+    const col = 2 + inputLayout.cursorCol;
     return { row, col: Math.min(col, cols) };
   }
 
-  private toDisplayString(value: string, cursor: number): { display: string; cursorDisplayIndex: number } {
-    // Render newlines visibly so the cursor can stay in a single-line input box.
-    // Mapping: '\n' -> ' ↩ '
-    let display = '';
-    let cursorDisplayIndex = 0;
-    for (let i = 0; i < value.length; i++) {
-      if (i === cursor) cursorDisplayIndex = stringWidth(display);
-      const ch = value[i]!;
-      if (ch === '\n') {
-        display += ' ↩ ';
-      } else {
-        display += ch;
-      }
-    }
-    if (cursor === value.length) cursorDisplayIndex = stringWidth(display);
-    return { display, cursorDisplayIndex };
+  private buildInputLayout(inner: number, prompt: string, maxVisibleRows: number): {
+    visibleLines: string[];
+    cursorRow: number;
+    cursorCol: number;
+  } {
+    const available = Math.max(1, inner - prompt.length);
+    const wrapped = wrapInputForBox(this.inputValue, available, this.cursor);
+    const total = wrapped.lines.length;
+    const cursorRowAbsolute = wrapped.cursorRow;
+    const visibleCount = Math.min(maxVisibleRows, Math.max(1, total));
+    const start = Math.min(
+      Math.max(0, cursorRowAbsolute - Math.floor(visibleCount * 0.6)),
+      Math.max(0, total - visibleCount),
+    );
+    const end = Math.min(total, start + visibleCount);
+    const visibleLines = wrapped.lines.slice(start, end);
+    const cursorRow = Math.min(visibleLines.length, Math.max(1, cursorRowAbsolute - start + 1));
+    // `wrapped.cursorCol` is 0-based within the wrapped line. Terminal cursor positions
+    // are 1-based, but we convert to absolute coordinates in `getCursorPositionInBox`.
+    // Keep this value as a 0-based offset from the start of the box's inner area.
+    const cursorCol = prompt.length + wrapped.cursorCol;
+    return { visibleLines, cursorRow, cursorCol };
   }
+}
+
+function wrapInputForBox(value: string, maxCols: number, cursor: number): { lines: string[]; cursorRow: number; cursorCol: number } {
+  const lines: string[] = [''];
+  let row = 0;
+  let col = 0;
+  let cursorRow = 0;
+  let cursorCol = 0;
+
+  const markCursor = (index: number): void => {
+    if (index === cursor) {
+      cursorRow = row;
+      cursorCol = col;
+    }
+  };
+
+  markCursor(0);
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    if (ch === '\n') {
+      row += 1;
+      lines.push('');
+      col = 0;
+      markCursor(i + 1);
+      continue;
+    }
+
+    const w = stringWidth(ch);
+    if (col + w > maxCols) {
+      row += 1;
+      lines.push('');
+      col = 0;
+    }
+
+    lines[row] += ch;
+    col += w;
+    markCursor(i + 1);
+  }
+
+  return { lines, cursorRow, cursorCol };
 }
 
 function summarizeInput(input: Record<string, unknown>): string {
