@@ -1,6 +1,7 @@
 import { input, select, checkbox } from '@inquirer/prompts';
 import type { Tool, ToolExecutionContext } from './base.js';
 import type { ToolDefinition, ToolResult } from '../types.js';
+import { withUiPaused } from '../cli/active-ui.js';
 
 export class AskUserTool implements Tool {
   definition: ToolDefinition = {
@@ -56,45 +57,47 @@ export class AskUserTool implements Tool {
     const answers: Record<string, any> = {};
 
     try {
-      for (const q of questions) {
-        if (ctx.signal?.aborted) {
-          throw new Error('Cancelled by user');
-        }
+      await withUiPaused(async () => {
+        for (const q of questions) {
+          if (ctx.signal?.aborted) {
+            throw new Error('Cancelled by user');
+          }
 
-        switch (q.type) {
-          case 'input': {
-            answers[q.id] = await input({
-              message: q.message,
-              default: q.default,
-            });
-            break;
-          }
-          case 'select': {
-            if (!q.options || q.options.length === 0) {
-              throw new Error(`Question "${q.id}" of type "select" requires options.`);
+          switch (q.type) {
+            case 'input': {
+              answers[q.id] = await input({
+                message: q.message,
+                default: q.default,
+              });
+              break;
             }
-            const choices = q.options.map((opt: string) => ({ value: opt }));
-            answers[q.id] = await select({
-              message: q.message,
-              choices,
-            });
-            break;
-          }
-          case 'checkbox': {
-            if (!q.options || q.options.length === 0) {
-              throw new Error(`Question "${q.id}" of type "checkbox" requires options.`);
+            case 'select': {
+              if (!q.options || q.options.length === 0) {
+                throw new Error(`Question "${q.id}" of type "select" requires options.`);
+              }
+              const choices = q.options.map((opt: string) => ({ value: opt }));
+              answers[q.id] = await select({
+                message: q.message,
+                choices,
+              });
+              break;
             }
-            const choices = q.options.map((opt: string) => ({ value: opt }));
-            answers[q.id] = await checkbox({
-              message: q.message,
-              choices,
-            });
-            break;
+            case 'checkbox': {
+              if (!q.options || q.options.length === 0) {
+                throw new Error(`Question "${q.id}" of type "checkbox" requires options.`);
+              }
+              const choices = q.options.map((opt: string) => ({ value: opt }));
+              answers[q.id] = await checkbox({
+                message: q.message,
+                choices,
+              });
+              break;
+            }
+            default:
+              throw new Error(`Unknown question type: ${q.type}`);
           }
-          default:
-            throw new Error(`Unknown question type: ${q.type}`);
         }
-      }
+      });
 
       return {
         tool_use_id: '',

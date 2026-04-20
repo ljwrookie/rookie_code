@@ -22,17 +22,85 @@ const HIGH_RISK_COMMANDS = new Set([
   'npx',
 ]);
 
-/** Environment variables to strip from child processes */
-const SENSITIVE_ENV_VARS = [
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-  'AWS_SECRET_ACCESS_KEY',
-  'GITHUB_TOKEN',
-  'NPM_TOKEN',
-  'PRIVATE_KEY',
+/**
+ * Allowlist of safe environment variable patterns to pass to child processes.
+ *
+ * This approach (allowlist) is much safer than a denylist because it only
+ * passes through known-safe variables, preventing accidental leakage of
+ * secrets or credentials that we haven't explicitly enumerated.
+ */
+const ENV_ALLOWLIST_PATTERNS: Array<RegExp | string> = [
+  // Common system vars
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'LANG',
+  'TERM',
+  'SHELL',
+  'EDITOR',
+  'VISUAL',
+  'PWD',
+  'TMPDIR',
+  'TEMP',
+  'TZ',
+  'HOSTNAME',
+  'NODE_ENV',
+  // Node.js / npm vars
+  /^NODE_/,
+  /^npm_config_/,
+  /^NPM_CONFIG_/,
+  // Locale
+  'LC_ALL',
+  'LC_CTYPE',
+  'LOCALE',
+  // XDG (common on Linux)
+  'XDG_CONFIG_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_DATA_HOME',
+  'XDG_RUNTIME_DIR',
+  // Color support
+  'COLORTERM',
+  'NO_COLOR',
+  'FORCE_COLOR',
+  // Less pager
+  'LESS',
+  'PAGER',
+  // Rookie-code non-sensitive vars
+  'ROOKIE_MAX_AGENT_DEPTH',
+  'ROOKIE_MAX_PARALLEL_AGENTS',
+  'ROOKIE_SKILLS_DIRS',
+  'CUSTOM_MODELS',
 ];
 
-export class Sandbox {
+function isAllowedEnvVar(key: string): boolean {
+  for (const pattern of ENV_ALLOWLIST_PATTERNS) {
+    if (typeof pattern === 'string') {
+      if (key === pattern) return true;
+    } else {
+      if (pattern.test(key)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Best-effort security sandbox for shell command execution.
+ *
+ * ⚠️ IMPORTANT — This is NOT a security sandbox in the container/isolation sense.
+ *
+ * This class provides a best-effort risk reduction layer that:
+ * - Restricts which commands can be executed via a whitelist
+ * - Detects common dangerous shell patterns (command substitution, pipe-to-shell, etc.)
+ * - Protects against path traversal attacks (including symlink-based bypasses)
+ * - Filters environment variables to prevent credential leakage
+ *
+ * For stronger isolation and security guarantees, use container/Docker-based
+ * execution environments. The current approach reduces low-level mistakes but
+ * cannot prevent all shell-based risks — a determined attacker with shell
+ * access can bypass these restrictions.
+ */
+export class CommandGuard {
   private allowedCommands: Set<string>;
   private blockedPaths: string[];
 
@@ -99,12 +167,16 @@ export class Sandbox {
 
   /**
    * Get a sanitized environment for child processes.
-   * Strips sensitive variables to prevent leakage.
+   * Uses an allowlist approach: only known-safe environment variables are passed through.
+   * This is much safer than a denylist because it prevents leakage of any
+   * secrets or credentials we haven't explicitly enumerated.
    */
   getSanitizedEnv(): NodeJS.ProcessEnv {
-    const env = { ...process.env };
-    for (const key of SENSITIVE_ENV_VARS) {
-      delete env[key];
+    const env: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (isAllowedEnvVar(key)) {
+        env[key] = value;
+      }
     }
     return env;
   }

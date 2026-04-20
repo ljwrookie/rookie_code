@@ -29,11 +29,11 @@ export function buildSystemPrompt(params: {
 - Always verify the current state of code before editing.
 
 ### Editing Files
-- Use \`edit_file\` for modifying existing files. Provide the exact text to find (old_string) and the replacement (new_string).
+- Use \`edit_file\` only for modifying existing files. Provide the exact text to find (old_string) and the replacement (new_string).
 - The old_string MUST match the file content exactly, including all whitespace, indentation, and line breaks.
 - Include enough surrounding context in old_string to ensure a unique match.
 - For creating new files, use \`write_file\`.
-- NEVER use edit_file with an empty old_string on an existing file.
+- NEVER use edit_file with an empty old_string.
 
 ### Writing Files
 - Use \`write_file\` only for creating new files that don't exist yet.

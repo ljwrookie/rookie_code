@@ -24,6 +24,7 @@
     "ai"
   ],
   "license": "MIT",
+  "files": ["dist"],
   "devDependencies": {
     "@types/diff": "^8.0.0",
     "@types/marked-terminal": "^6.1.1",

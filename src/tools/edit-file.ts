@@ -1,21 +1,20 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import type { Tool } from './base.js';
 import type { ToolDefinition, ToolResult } from '../types.js';
 import { searchReplace } from '../editor/search-replace.js';
 import { formatDiff } from '../editor/diff-display.js';
-import { resolvePathForRead, resolvePathForWrite } from '../security/path-utils.js';
+import { resolvePathForRead } from '../security/path-utils.js';
 import { confirm } from '../cli/confirm.js';
 import { assessTextChangeRisk } from '../changes/risk.js';
+import { withUiPaused } from '../cli/active-ui.js';
 
 export class EditFileTool implements Tool {
   definition: ToolDefinition = {
     name: 'edit_file',
     description:
-      'Edit a file by replacing a specific string with a new string. ' +
+      'Edit an existing file by replacing a specific string with a new string. ' +
       'The old_string should match uniquely in the file. Supports fuzzy matching ' +
       'for minor whitespace/indentation differences. ' +
-      'If old_string is empty and the file does not exist, creates the file with new_string. ' +
       'Returns a diff preview on success.',
     input_schema: {
       type: 'object',
@@ -28,7 +27,7 @@ export class EditFileTool implements Tool {
           type: 'string',
           description:
             'The string to find and replace. Must match uniquely. ' +
-            'Include enough context for a unique match. Empty string + non-existent file = create new file.',
+            'Include enough context for a unique match. Must be non-empty for edit_file.',
         },
         new_string: {
           type: 'string',
@@ -54,25 +53,14 @@ export class EditFileTool implements Tool {
     const newString = input['new_string'] as string;
 
     try {
-      // Case: Create new file (old_string is empty)
+      // old_string must be non-empty for edits.
       if (!oldString) {
-        const resolved = await resolvePathForWrite(this.workingDir, filePath);
-        const exists = await fileExists(resolved);
-        if (exists) {
-          return {
-            tool_use_id: '',
-            content:
-              'Error: old_string is empty but file already exists. ' +
-              'Use a non-empty old_string to edit existing files, or use write_file to overwrite.',
-            is_error: true,
-          };
-        }
-        await fs.mkdir(path.dirname(resolved), { recursive: true });
-        await fs.writeFile(resolved, newString, 'utf-8');
         return {
           tool_use_id: '',
-          content: `Created new file: ${filePath} (${newString.split('\n').length} lines)`,
-          is_error: false,
+          content:
+            'Error: old_string must be non-empty for edit_file. ' +
+            'Use write_file to create a new file.',
+          is_error: true,
         };
       }
 
@@ -136,8 +124,10 @@ export class EditFileTool implements Tool {
           };
         }
 
-        console.error(diff);
-        const approved = await confirm(`Apply fuzzy edit to ${filePath}?`);
+        const approved = await withUiPaused(async () => {
+          console.error(diff);
+          return confirm(`Apply fuzzy edit to ${filePath}?`);
+        });
         if (!approved) {
           return {
             tool_use_id: '',
@@ -166,10 +156,10 @@ export class EditFileTool implements Tool {
               is_error: true,
             };
           }
-          console.error(diff);
-          const approved = await confirm(
-            `Apply high-risk edit to ${filePath}? (${risk.reasons.join(', ')})`,
-          );
+          const approved = await withUiPaused(async () => {
+            console.error(diff);
+            return confirm(`Apply high-risk edit to ${filePath}? (${risk.reasons.join(', ')})`);
+          });
           if (!approved) {
             return {
               tool_use_id: '',
@@ -205,17 +195,6 @@ export class EditFileTool implements Tool {
         is_error: true,
       };
     }
-  }
-}
-
-// --- Helper functions ---
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
   }
 }
 

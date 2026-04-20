@@ -1,6 +1,6 @@
 import type { Tool } from './base.js';
 import type { ToolDefinition, ToolResult } from '../types.js';
-import { Sandbox } from '../security/sandbox.js';
+import { CommandGuard } from '../security/sandbox.js';
 import { confirm } from '../cli/confirm.js';
 import { truncateByBytes } from '../utils/truncate.js';
 import { runProcess } from '../utils/process.js';
@@ -36,14 +36,14 @@ export class ShellExecTool implements Tool {
     },
   };
 
-  private sandbox: Sandbox;
+  private commandGuard: CommandGuard;
 
   constructor(
     private workingDir: string,
     securityConfig: Config['security'],
     private requireConfirmation: boolean = true,
   ) {
-    this.sandbox = new Sandbox(securityConfig);
+    this.commandGuard = new CommandGuard(securityConfig);
   }
 
   async execute(input: Record<string, unknown>): Promise<ToolResult> {
@@ -60,7 +60,7 @@ export class ShellExecTool implements Tool {
 
     try {
       // Security check
-      const check = this.sandbox.checkCommand(command);
+      const check = this.commandGuard.checkCommand(command);
 
       if (check === 'blocked') {
         return {
@@ -101,7 +101,7 @@ export class ShellExecTool implements Tool {
     signal?: AbortSignal,
   ): Promise<ToolResult> {
     return new Promise((resolve) => {
-      const env = this.sandbox.getSanitizedEnv();
+      const env = this.commandGuard.getSanitizedEnv();
       runProcess({
         command: process.env['SHELL'] || '/bin/sh',
         args: ['-lc', command],

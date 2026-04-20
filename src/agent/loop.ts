@@ -2,7 +2,7 @@ import type { LLMProvider } from '../llm/provider.js';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { Message, ContentBlock, ToolUseBlock, ToolResult, AgentEvent } from '../types.js';
 import { buildSystemPrompt } from './system-prompt.js';
-import { countPromptTokens } from '../utils/tokens.js';
+import { countMessagesTokens, countPromptTokens, countTokens } from '../utils/tokens.js';
 import { logger } from '../utils/logger.js';
 import type { MemoryManager } from '../memory/manager.js';
 import { validateToolInput } from '../tools/validate-input.js';
@@ -37,6 +37,25 @@ export class AgentLoop {
     private tools: ToolRegistry,
     private options: AgentLoopOptions,
   ) {}
+
+  getTokenBudget(): number | undefined {
+    return this.options.tokenBudget;
+  }
+
+  /**
+   * Compute the prompt token count for a given message list using the same
+   * system prompt construction logic as the agent loop. This is useful for UI.
+   */
+  async estimatePromptTokens(messages: Message[]): Promise<{
+    totalTokens: number;
+    systemTokens: number;
+    messagesTokens: number;
+  }> {
+    const promptState = await this.preparePromptState(messages);
+    const systemTokens = countTokens(promptState.systemPrompt);
+    const messagesTokens = countMessagesTokens(messages);
+    return { totalTokens: promptState.totalTokens, systemTokens, messagesTokens };
+  }
 
   /**
    * Run the agent loop for a single user message.
@@ -140,6 +159,16 @@ export class AgentLoop {
         });
 
         const wrapped = wrapToolOutputForLLM({ toolName: toolUse.name, content: result.content });
+        if (wrapped.flagged) {
+          this.emit({
+            type: 'notification',
+            data: {
+              title: 'Prompt injection warning',
+              message: `${toolUse.name}: ${wrapped.reasons.join(', ')}`,
+              notification_type: 'warning',
+            },
+          });
+        }
         return {
           type: 'tool_result' as const,
           tool_use_id: toolUse.id,

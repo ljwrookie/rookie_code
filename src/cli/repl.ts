@@ -1,121 +1,28 @@
-import { input } from '@inquirer/prompts';
-import { createPrompt, useState, useKeypress, isEnterKey, isUpKey, isDownKey } from '@inquirer/core';
-import type { InquirerReadline } from '@inquirer/type';
 import chalk from 'chalk';
 import type { AgentLoop } from '../agent/loop.js';
 import type { LLMProvider } from '../llm/provider.js';
 import { ConversationManager } from '../agent/conversation.js';
 import type { MemoryManager } from '../memory/manager.js';
 import { GitOperations } from '../repo/git.js';
-import { Renderer } from './renderer.js';
 import { executeCommand, commands, type CommandContext } from './commands.js';
 import type { McpManager } from '../mcp/manager.js';
 import type { SkillManager } from '../skills/manager.js';
 import type { HookManager } from '../hooks/manager.js';
 import type { SessionLogger } from '../observability/session-logger.js';
-
-type CompletionEntry = { name: string; description: string };
-
-let completionEntries: CompletionEntry[] = commands.map((c) => ({
-  name: c.name,
-  description: c.description,
-}));
-
-function refreshCompletionEntries(skillManager?: SkillManager): void {
-  const base: CompletionEntry[] = commands.map((c) => ({ name: c.name, description: c.description }));
-  const skills = skillManager?.list() ?? [];
-  const skillEntries: CompletionEntry[] = skills.map((s) => ({
-    name: `/${s.name}`,
-    description: s.description ? `Skill — ${s.description}` : 'Skill',
-  }));
-
-  completionEntries = [...base, ...skillEntries];
-}
+import type { TerminalUI } from './terminal-ui.js';
+import type { CompletionItem } from './terminal-ui.js';
+import { withUiPaused } from './active-ui.js';
 
 export interface REPLOptions {
   provider: LLMProvider;
   workingDirectory: string;
   memoryManager: MemoryManager;
-  renderer?: Renderer;
+  ui: TerminalUI;
   mcpManager?: McpManager;
   skillManager?: SkillManager;
   hookManager?: HookManager;
   sessionLogger?: SessionLogger;
 }
-
-const replPrompt = createPrompt<string, { message: string }>((config, done) => {
-  const [value, setValue] = useState('');
-  const [activeIdx, setActiveIdx] = useState(0);
-  const [isDone, setIsDone] = useState(false);
-
-  const isCommand = value.startsWith('/');
-  const hasSpace = value.includes(' ');
-  const suggestions = (isCommand && !hasSpace)
-    ? completionEntries.filter(c => c.name.startsWith(value))
-    : [];
-
-  useKeypress((key, rl) => {
-    const readline = rl as InquirerReadline & { cursor: number };
-
-    if (isEnterKey(key)) {
-      const submitted = value || readline.line;
-      setValue(submitted);
-      setIsDone(true);
-      done(submitted);
-    } else if (key.name === 'tab') {
-      if (suggestions.length > 0) {
-        const suggestion = suggestions[activeIdx]?.name;
-        if (suggestion) {
-          readline.line = suggestion + ' ';
-          readline.cursor = readline.line.length;
-          setValue(readline.line);
-          setActiveIdx(0);
-        }
-      }
-    } else if (key.name === 'up' || isUpKey(key)) {
-      if (suggestions.length > 0) {
-        setActiveIdx(activeIdx > 0 ? activeIdx - 1 : suggestions.length - 1);
-      }
-    } else if (key.name === 'down' || isDownKey(key)) {
-      if (suggestions.length > 0) {
-        setActiveIdx(activeIdx < suggestions.length - 1 ? activeIdx + 1 : 0);
-      }
-    } else {
-      if (value !== readline.line) {
-        setValue(readline.line);
-        setActiveIdx(0);
-      }
-    }
-  });
-
-  const message = config.message;
-  let formattedValue = value;
-  
-  if (isDone) {
-    return `${message}${value}\n`;
-  }
-
-  if (suggestions.length > 0 && activeIdx < suggestions.length) {
-    const suggestion = suggestions[activeIdx]?.name;
-    if (suggestion && suggestion.startsWith(value)) {
-      const hint = suggestion.slice(value.length);
-      formattedValue = value + chalk.gray(hint);
-    }
-  }
-
-  let output = `${message}${formattedValue}`;
-
-  if (suggestions.length > 0 && !hasSpace) {
-    const list = suggestions.map((s, i) => {
-      const prefix = i === activeIdx ? chalk.cyan('❯') : ' ';
-      const name = i === activeIdx ? chalk.cyan(s.name) : s.name;
-      return `${prefix} ${name}  ${chalk.gray(s.description)}`;
-    }).join('\n');
-    return [output, list];
-  }
-
-  return output;
-});
 
 /**
  * Interactive REPL for the code agent.
@@ -123,10 +30,15 @@ const replPrompt = createPrompt<string, { message: string }>((config, done) => {
 export class REPL {
   private conversation: ConversationManager;
   private git: GitOperations;
-  private renderer: Renderer;
+  private ui: TerminalUI;
   private abortController: AbortController | null = null;
   private commandCtx: CommandContext;
   private sessionLogger?: SessionLogger;
+  private queue: string[] = [];
+  private processing = false;
+  private readonly exitPromise: Promise<void>;
+  private resolveExit!: () => void;
+  private windowBaseTokens = 0;
 
   constructor(
     private agentLoop: AgentLoop,
@@ -134,7 +46,7 @@ export class REPL {
   ) {
     this.conversation = new ConversationManager();
     this.git = new GitOperations(options.workingDirectory);
-    this.renderer = options.renderer ?? new Renderer();
+    this.ui = options.ui;
     this.commandCtx = {
       conversation: this.conversation,
       git: this.git,
@@ -148,7 +60,9 @@ export class REPL {
 
     this.sessionLogger = options.sessionLogger;
 
-    refreshCompletionEntries(options.skillManager);
+    this.exitPromise = new Promise<void>((resolve) => {
+      this.resolveExit = resolve;
+    });
   }
 
   private buildSkillInvocation(input: string): string | null {
@@ -182,172 +96,213 @@ export class REPL {
   }
 
   async start(): Promise<void> {
-    this.renderer.renderWelcome();
+    this.ui.start();
+    this.ui.renderWelcome();
     if (this.commandCtx.hookManager) {
       await this.commandCtx.hookManager.emitSessionStart('startup');
     }
+    await this.refreshWindowBaseTokens();
+    return this.exitPromise;
+  }
 
-    // Handle Ctrl+C: abort current request, don't exit
-    process.on('SIGINT', () => {
-      if (this.abortController) {
-        this.abortController.abort();
-        this.abortController = null;
-        this.renderer.endStream();
-        console.error(chalk.yellow('\n⚠ Request cancelled.'));
+  getCompletions(currentInput: string): CompletionItem[] {
+    const value = currentInput.trimStart();
+    if (!value.startsWith('/')) return [];
+    if (value.includes(' ')) return [];
+
+    const entries: CompletionItem[] = [];
+    for (const c of commands) {
+      if (c.name.startsWith(value)) {
+        entries.push({ name: c.name, description: c.description });
+      }
+    }
+
+    const skills = this.commandCtx.skillManager?.list() ?? [];
+    for (const s of skills) {
+      const name = `/${s.name}`;
+      if (name.startsWith(value)) {
+        entries.push({ name, description: s.description ? `Skill — ${s.description}` : 'Skill' });
+      }
+    }
+
+    return entries.slice(0, 20);
+  }
+
+  enqueueInput(text: string): void {
+    const input = text.trim();
+    if (!input) return;
+    const queued = this.isBusy() || this.processing || this.queue.length > 0;
+    this.ui.appendLine(chalk.cyan.bold('❯ ') + input.replace(/\n/g, '\\n') + (queued ? chalk.gray(' (queued)') : ''));
+    this.queue.push(input);
+    void this.sessionLogger?.log('user_input', { input });
+    void this.processQueue();
+  }
+
+  abortCurrent(): void {
+    this.abortController?.abort();
+  }
+
+  exit(reason: 'other' | 'prompt_input_exit' = 'other'): void {
+    void this.commandCtx.hookManager?.emitSessionEnd(reason);
+    this.ui.stop();
+    this.resolveExit();
+  }
+
+  getQueueSize(): number {
+    return this.queue.length;
+  }
+
+  isBusy(): boolean {
+    return this.abortController != null;
+  }
+
+  getTotalHistoryTokens(): number {
+    return this.conversation.estimateTokens();
+  }
+
+  getWindowBaseTokens(): number {
+    return this.windowBaseTokens;
+  }
+
+  getTokenBudget(): number | undefined {
+    return this.agentLoop.getTokenBudget();
+  }
+
+  private async processQueue(): Promise<void> {
+    if (this.processing) return;
+    this.processing = true;
+    try {
+      while (this.queue.length > 0) {
+        const input = this.queue.shift()!;
+        await this.handleOneInput(input);
+      }
+    } finally {
+      this.processing = false;
+    }
+  }
+
+  private async handleOneInput(userInput: string): Promise<void> {
+    await this.refreshWindowBaseTokens();
+
+    // Slash commands
+    if (userInput.startsWith('/')) {
+      const hooks = this.commandCtx.hookManager;
+      const before = hooks ? await hooks.emitBeforeExecuteCommand(userInput) : { input: userInput, bypass: false };
+      userInput = before.input;
+
+      const result = before.bypass
+        ? 'handled'
+        : await this.runWithCapturedOutput(() => executeCommand(userInput, this.commandCtx));
+      if (hooks) {
+        await hooks.emitAfterExecuteCommand(userInput, result);
+      }
+      await this.sessionLogger?.log('slash_command', { input: userInput, result });
+      if (result === 'exit') {
+        this.exit('other');
+        return;
+      }
+      if (result === 'handled') return;
+
+      // Fallback: treat unknown slash command as a skill entrypoint
+      const skillInput = this.buildSkillInvocation(userInput);
+      if (skillInput) {
+        userInput = skillInput;
       } else {
-        // No active request — exit
-        if (this.commandCtx.hookManager) {
-          this.commandCtx.hookManager.emitSessionEnd('other').catch(() => {});
-        }
-        console.error(chalk.gray('\nBye!'));
-        process.exit(0);
+        return;
       }
-    });
+    }
 
-    while (true) {
-      let userInput: string;
-      try {
-        const line = await replPrompt({
-          message: chalk.cyan.bold('❯ '),
+    this.abortController = new AbortController();
+    try {
+      await this.refreshWindowBaseTokens();
+
+      const hooks = this.commandCtx.hookManager;
+      if (hooks) {
+        userInput = await hooks.emitBeforeAgentRun(userInput);
+      }
+
+      const history = this.conversation.getMessages();
+      const turn = this.commandCtx.memoryManager?.advanceTurn();
+      const updatedHistory = await this.agentLoop.run(
+        userInput,
+        history,
+        this.abortController.signal,
+      );
+      if (hooks) {
+        await hooks.emitAfterAgentRun(userInput);
+      }
+
+      const newMessages = updatedHistory.slice(history.length);
+      this.conversation.addMessages(newMessages);
+      await this.refreshWindowBaseTokens();
+      if (turn != null) {
+        await this.commandCtx.memoryManager?.captureAutoMemory({
+          userInput,
+          turn,
+          scope: 'project',
         });
-        userInput = line.trim();
-      } catch (err: any) {
-        if (err.name === 'ExitPromptError') {
-          if (this.commandCtx.hookManager) {
-            await this.commandCtx.hookManager.emitSessionEnd('prompt_input_exit');
-          }
-          console.error(chalk.gray('\nBye!'));
-          break;
-        }
-        if (this.commandCtx.hookManager) {
-          await this.commandCtx.hookManager.emitSessionEnd('other');
-        }
-        break;
       }
-
-      if (!userInput) continue;
-      await this.sessionLogger?.log('user_input', { input: userInput });
-
-      // Handle slash commands
-      if (userInput.startsWith('/')) {
-        const hooks = this.commandCtx.hookManager;
-        const before = hooks ? await hooks.emitBeforeExecuteCommand(userInput) : { input: userInput, bypass: false };
-        userInput = before.input;
-
-        const result = before.bypass ? 'handled' : await executeCommand(userInput, this.commandCtx);
-        if (hooks) {
-          await hooks.emitAfterExecuteCommand(userInput, result);
-        }
-        await this.sessionLogger?.log('slash_command', { input: userInput, result });
-        if (result === 'exit') {
-          console.error(chalk.gray('Bye!'));
-          break;
-        }
-
-        if (result === 'handled') {
-          continue;
-        }
-
-        // Fallback: treat unknown slash command as a skill entrypoint `/<skill>`
-        const skillInput = this.buildSkillInvocation(userInput);
-        if (skillInput) {
-          userInput = skillInput;
-          // fall through to agent execution
-        } else {
-          continue;
-        }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        this.ui.appendLine(chalk.yellow('⚠ 已取消当前请求'));
+      } else if (err instanceof Error) {
+        this.ui.appendLine(chalk.red(`✖ Error: ${err.message}`));
+      } else {
+        this.ui.appendLine(chalk.red(`✖ Error: ${String(err)}`));
       }
-
-      // Handle multi-line input (lines ending with \)
-      let fullInput = userInput;
-      while (fullInput.endsWith('\\')) {
-        fullInput = fullInput.slice(0, -1) + '\n';
-        try {
-          const continuation = await input({
-            message: chalk.cyan.bold('       ❯ '),
-            transformer: (value: string, { isFinal }) => {
-              return isFinal ? value : value;
-            },
-            theme: {
-              prefix: ''
-            }
-          });
-          fullInput += continuation;
-          console.error(chalk.cyan.bold('       ❯ ') + continuation);
-        } catch (err: any) {
-          if (err.name === 'ExitPromptError') {
-            break;
-          }
-          break;
-        }
-      }
-
-      // Run agent loop
-      this.abortController = new AbortController();
-      try {
-        // Auto-checkpoint before running agent (if in git repo)
-        await this.maybeCheckpoint();
-
-        this.renderer.startThinking();
-        const history = this.conversation.getMessages();
-        const turn = this.commandCtx.memoryManager?.advanceTurn();
-        const hooks = this.commandCtx.hookManager;
-        if (hooks) {
-          fullInput = await hooks.emitBeforeAgentRun(fullInput);
-        }
-        const updatedHistory = await this.agentLoop.run(
-          fullInput,
-          history,
-          this.abortController.signal,
-        );
-        if (hooks) {
-          await hooks.emitAfterAgentRun(fullInput);
-        }
-
-        // Update conversation with new messages
-        // The agent returns the full history including the user message and responses
-        // We need to extract only the new messages added during this run
-        const newMessages = updatedHistory.slice(history.length);
-        this.conversation.addMessages(newMessages);
-        if (turn != null) {
-          await this.commandCtx.memoryManager?.captureAutoMemory({
-            userInput: fullInput,
-            turn,
-            scope: 'project',
-          });
-        }
-
-        this.renderer.endStream();
-        console.error(''); // blank line after response
-      } catch (err) {
-        this.renderer.endStream();
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          // Already handled by SIGINT handler
-        } else if (err instanceof Error) {
-          this.renderer.renderError(err);
-        } else {
-          console.error(chalk.red(`Error: ${String(err)}`));
-        }
-      } finally {
-        this.abortController = null;
-      }
+    } finally {
+      this.abortController = null;
+      this.ui.appendLine('');
     }
   }
 
   /**
-   * Create a git checkpoint if there are uncommitted changes.
+   * Some slash commands print directly to stdout/stderr (console.error/log).
+   * In TUI mode that would overwrite the input box. Capture output and append
+   * it to the transcript instead.
    */
-  private async maybeCheckpoint(): Promise<void> {
-    try {
-      const isRepo = await this.git.isGitRepo();
-      if (!isRepo) return;
+  private async runWithCapturedOutput<T>(fn: () => Promise<T>): Promise<T> {
+    let buffer = '';
+    const writeOut = (chunk: any): boolean => {
+      buffer += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+      return true;
+    };
 
-      const hasChanges = await this.git.hasUncommittedChanges();
-      if (hasChanges) {
-        await this.git.createCheckpoint('before agent run');
+    const origStdoutWrite = process.stdout.write.bind(process.stdout);
+    const origStderrWrite = process.stderr.write.bind(process.stderr);
+
+    let result!: T;
+    await withUiPaused(async () => {
+      (process.stdout as any).write = writeOut;
+      (process.stderr as any).write = writeOut;
+      try {
+        result = await fn();
+      } finally {
+        (process.stdout as any).write = origStdoutWrite;
+        (process.stderr as any).write = origStderrWrite;
       }
+    });
+
+    const text = buffer.trimEnd();
+    if (text) {
+      for (const line of text.split('\n')) {
+        const l = line.replace(/\r$/, '');
+        if (l.trim().length === 0) continue;
+        this.ui.appendLine(l);
+      }
+      this.ui.appendLine('');
+    }
+
+    return result;
+  }
+
+  private async refreshWindowBaseTokens(): Promise<void> {
+    try {
+      const history = this.conversation.getMessages();
+      const tokenState = await this.agentLoop.estimatePromptTokens(history);
+      this.windowBaseTokens = tokenState.totalTokens;
     } catch {
-      // Non-fatal: checkpoint failure shouldn't block the agent
+      // Non-fatal: UI can keep stale stats
     }
   }
 }

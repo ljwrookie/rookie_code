@@ -6,6 +6,7 @@ import { resolvePathForRead, resolvePathForWrite } from '../security/path-utils.
 import { formatDiff } from '../editor/diff-display.js';
 import { confirm } from '../cli/confirm.js';
 import { assessTextChangeRisk } from '../changes/risk.js';
+import { withUiPaused } from '../cli/active-ui.js';
 
 export class WriteFileTool implements Tool {
   definition: ToolDefinition = {
@@ -82,10 +83,10 @@ export class WriteFileTool implements Tool {
               is_error: true,
             };
           }
-          console.error(diff);
-          const approved = await confirm(
-            `Create high-risk file ${filePath}? (${risk.reasons.join(', ')})`,
-          );
+          const approved = await withUiPaused(async () => {
+            console.error(diff);
+            return confirm(`Create high-risk file ${filePath}? (${risk.reasons.join(', ')})`);
+          });
           if (!approved) {
             return {
               tool_use_id: '',

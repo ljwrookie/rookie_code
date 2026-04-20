@@ -55,6 +55,15 @@ export interface ToolResult {
   is_error: boolean;
 }
 
+// --- LLM Overrides (from CLI args) ---
+
+export interface LLMOverrides {
+  provider?: 'anthropic' | 'openai';
+  model?: string;
+  apiKey?: string;
+  baseURL?: string;
+}
+
 // --- Config Types ---
 
 export interface Config {
