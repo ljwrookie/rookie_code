@@ -39,6 +39,8 @@ const ANSI = {
 export class TerminalUI {
   private transcript: string[] = [];
   private streamText = '';
+  private pendingInputs: string[] = [];
+  private activeInput: string | null = null;
 
   private welcome: { provider?: string; model?: string } = {};
   private inputValue = '';
@@ -65,6 +67,12 @@ export class TerminalUI {
     this.welcome = { ...this.welcome, ...info };
   }
 
+  setQueueState(state: { activeInput: string | null; pendingInputs: string[] }): void {
+    this.activeInput = state.activeInput;
+    this.pendingInputs = [...state.pendingInputs];
+    this.scheduleRender();
+  }
+
   setCompletionProvider(provider: CompletionProvider | null): void {
     this.completionProvider = provider;
     this.activeCompletionIdx = 0;
@@ -83,6 +91,7 @@ export class TerminalUI {
 
     if (process.stdin.isTTY) {
       process.stdin.setRawMode(true);
+      process.stdin.resume();
     }
     process.stdin.on('data', this.onData);
     process.stdout.on('resize', this.onResize);
@@ -93,9 +102,14 @@ export class TerminalUI {
   stop(): void {
     if (!this.started) return;
     this.started = false;
-    this.pause();
+    this.paused = false;
+    process.stdin.off('data', this.onData);
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+    }
     this.clearScreen();
-    process.stdout.write(ANSI.showCursor);
+    process.stdout.write(ANSI.home + ANSI.showCursor);
     process.stdout.write(ANSI.altScrollOff + ANSI.wrapOn + ANSI.altScreenOff);
     process.stdout.off('resize', this.onResize);
     registerActiveUI(null);
@@ -104,8 +118,6 @@ export class TerminalUI {
   pause(): void {
     if (this.paused) return;
     this.paused = true;
-    process.stdin.off('data', this.onData);
-    if (process.stdin.isTTY) process.stdin.setRawMode(false);
     process.stdout.write(ANSI.showCursor);
   }
 
@@ -113,8 +125,20 @@ export class TerminalUI {
     if (!this.paused) return;
     this.paused = false;
     if (process.stdin.isTTY) process.stdin.setRawMode(true);
-    process.stdin.on('data', this.onData);
     this.scheduleRender();
+  }
+
+  suspendForPrompt(): void {
+    if (!this.started) return;
+    this.pause();
+    this.clearScreen();
+    process.stdout.write(ANSI.home + ANSI.showCursor + ANSI.wrapOn);
+  }
+
+  resumeFromPrompt(): void {
+    if (!this.started) return;
+    process.stdout.write(ANSI.wrapOff);
+    this.resume();
   }
 
   appendLine(line: string): void {
@@ -232,8 +256,8 @@ export class TerminalUI {
   };
 
   private onData = (chunk: Buffer): void => {
-    if (this.paused) return;
     const s = this.decoder.decode(chunk, { stream: true });
+    if (this.paused) return;
     this.inputBuf += s;
     if (this.inputBuf.length > 8192) this.inputBuf = this.inputBuf.slice(-4096);
     this.consumeInputBuffer();
@@ -442,7 +466,9 @@ export class TerminalUI {
     const footerLines = 2;
     const completions = this.getCompletions();
     const completionLines = Math.min(6, completions.length);
-    const reserved = headerHeight + boxLines + footerLines + completionLines;
+    const pendingView = this.renderPendingInputs(printCols);
+    const pendingLines = pendingView.length;
+    const reserved = headerHeight + boxLines + footerLines + completionLines + pendingLines;
     const outHeight = Math.max(3, rows - reserved);
 
     const stats = this.statsProvider();
@@ -468,6 +494,7 @@ export class TerminalUI {
 
     const screen: string[] = [];
     for (const l of outputLines) screen.push(padToCols(l, printCols));
+    for (const l of pendingView) screen.push(padToCols(l, printCols));
     for (const l of completionView) screen.push(padToCols(l, printCols));
     for (const l of box) screen.push(padToCols(l, printCols));
     screen.push(padToCols(footer1, printCols));
@@ -542,6 +569,25 @@ export class TerminalUI {
     } catch {
       return [];
     }
+  }
+
+  private renderPendingInputs(cols: number): string[] {
+    const lines: string[] = [];
+    if (this.activeInput) {
+      lines.push(chalk.yellow('处理中'));
+      lines.push(chalk.yellow('› ') + sliceByColumns(this.activeInput.replace(/\n/g, ' ↩ '), 0, Math.max(0, cols - 2)));
+    }
+    if (this.pendingInputs.length > 0) {
+      if (lines.length > 0) lines.push('');
+      lines.push(chalk.gray(`待处理队列（${this.pendingInputs.length}）`));
+      for (const input of this.pendingInputs.slice(0, 3)) {
+        lines.push(chalk.cyan('… ') + sliceByColumns(input.replace(/\n/g, ' ↩ '), 0, Math.max(0, cols - 2)));
+      }
+      if (this.pendingInputs.length > 3) {
+        lines.push(chalk.gray(`... 还有 ${this.pendingInputs.length - 3} 条`));
+      }
+    }
+    return lines;
   }
 
   private renderCompletions(cols: number, list: CompletionItem[]): string[] {

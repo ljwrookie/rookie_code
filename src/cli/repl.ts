@@ -36,6 +36,7 @@ export class REPL {
   private sessionLogger?: SessionLogger;
   private queue: string[] = [];
   private processing = false;
+  private activeInput: string | null = null;
   private readonly exitPromise: Promise<void>;
   private resolveExit!: () => void;
   private windowBaseTokens = 0;
@@ -131,9 +132,8 @@ export class REPL {
   enqueueInput(text: string): void {
     const input = text.trim();
     if (!input) return;
-    const queued = this.isBusy() || this.processing || this.queue.length > 0;
-    this.ui.appendLine(chalk.cyan.bold('❯ ') + input.replace(/\n/g, '\\n') + (queued ? chalk.gray(' (queued)') : ''));
     this.queue.push(input);
+    this.ui.setQueueState({ activeInput: this.activeInput, pendingInputs: this.queue });
     void this.sessionLogger?.log('user_input', { input });
     void this.processQueue();
   }
@@ -150,6 +150,14 @@ export class REPL {
 
   getQueueSize(): number {
     return this.queue.length;
+  }
+
+  getActiveInput(): string | null {
+    return this.activeInput;
+  }
+
+  getPendingInputs(): string[] {
+    return [...this.queue];
   }
 
   isBusy(): boolean {
@@ -174,7 +182,12 @@ export class REPL {
     try {
       while (this.queue.length > 0) {
         const input = this.queue.shift()!;
+        this.activeInput = input;
+        this.ui.setQueueState({ activeInput: this.activeInput, pendingInputs: this.queue });
+        this.ui.appendLine(chalk.cyan.bold('❯ ') + input.replace(/\n/g, '\\n'));
         await this.handleOneInput(input);
+        this.activeInput = null;
+        this.ui.setQueueState({ activeInput: null, pendingInputs: this.queue });
       }
     } finally {
       this.processing = false;

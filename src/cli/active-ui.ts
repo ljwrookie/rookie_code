@@ -1,6 +1,8 @@
 export type ActiveUIController = {
   pause(): void;
   resume(): void;
+  suspendForPrompt?(): void;
+  resumeFromPrompt?(): void;
 };
 
 let activeUI: ActiveUIController | null = null;
@@ -11,11 +13,13 @@ export function registerActiveUI(ui: ActiveUIController | null): void {
 
 export async function withUiPaused<T>(fn: () => Promise<T>): Promise<T> {
   if (!activeUI) return fn();
-  activeUI.pause();
+  const suspend = activeUI.suspendForPrompt?.bind(activeUI) ?? activeUI.pause.bind(activeUI);
+  const resume = activeUI.resumeFromPrompt?.bind(activeUI) ?? activeUI.resume.bind(activeUI);
+  suspend();
   try {
     return await fn();
   } finally {
-    activeUI.resume();
+    resume();
   }
 }
 

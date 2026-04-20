@@ -58,6 +58,7 @@ export class AskUserTool implements Tool {
 
     try {
       await withUiPaused(async () => {
+        console.error('需要你确认一些信息：');
         for (const q of questions) {
           if (ctx.signal?.aborted) {
             throw new Error('Cancelled by user');
