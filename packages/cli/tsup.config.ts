@@ -7,5 +7,6 @@ export default defineConfig({
   dts: false,
   sourcemap: true,
   clean: true,
+  outDir: '../../output/rookie-code-dist',
   banner: { js: '#!/usr/bin/env node' },
 });

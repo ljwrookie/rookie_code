@@ -12,12 +12,12 @@
   },
   "homepage": "https://github.com/ljwrookie/rookie_code#readme",
   "bin": {
-    "rookie-code": "dist/index.js"
+    "rookie-code": "../../output/rookie-code-dist/index.js"
   },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "start": "node dist/index.js",
+    "start": "node ../../output/rookie-code-dist/index.js",
     "test": "vitest",
     "test:run": "vitest run",
     "lint": "tsc --noEmit"
