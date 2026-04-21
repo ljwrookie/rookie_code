@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/logo.svg" alt="Rookie Code" width="560" />
+  <img src="./assets/logo.png" alt="Rookie Code" width="560" />
 </p>
 
 <p align="center">
