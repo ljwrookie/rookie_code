@@ -5,7 +5,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev:cli": "pnpm --filter rookie-code dev",
-    "start:cli": "node packages/cli/dist/index.js",
+    "start:cli": "pnpm --filter rookie-code start",
     "lint": "pnpm -r lint",
     "test": "pnpm -r --if-present test",
     "test:run": "pnpm -r --if-present test:run"
