@@ -1,1 +1,73 @@
 /* App-specific styles */
+
+.demo-composer {
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease,
+    transform 180ms ease;
+}
+
+.demo-composer.is-sending {
+  border-color: rgba(0, 255, 136, 0.55);
+  background-color: rgba(44, 44, 62, 0.96);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 255, 136, 0.18),
+    0 0 0 1px rgba(0, 255, 136, 0.08),
+    0 0 22px rgba(0, 255, 136, 0.15);
+  transform: translateY(-1px);
+}
+
+.demo-caret {
+  display: inline-block;
+  width: 0.55ch;
+  height: 1.05em;
+  background: #00ff88;
+  border-radius: 1px;
+  box-shadow: 0 0 12px rgba(0, 255, 136, 0.5);
+  animation: demo-caret-blink 1s steps(1, end) infinite;
+}
+
+.demo-caret--idle {
+  background: rgba(0, 255, 136, 0.55);
+  box-shadow: none;
+}
+
+.demo-enter-hint {
+  min-width: 48px;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  color: rgba(226, 232, 240, 0.5);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  letter-spacing: 0.08em;
+  text-align: center;
+  transition:
+    color 180ms ease,
+    border-color 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.demo-enter-hint.is-active {
+  color: #03140d;
+  border-color: rgba(0, 255, 136, 0.8);
+  background: linear-gradient(135deg, #00ff88, #7dffbf);
+  box-shadow: 0 0 20px rgba(0, 255, 136, 0.35);
+  transform: translateY(-1px);
+}
+
+@keyframes demo-caret-blink {
+  0%,
+  46% {
+    opacity: 1;
+  }
+
+  47%,
+  100% {
+    opacity: 0;
+  }
+}
