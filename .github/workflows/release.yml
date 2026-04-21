@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   release:
+    # Prevent the version-bump commit pushed by this workflow from triggering another publish run.
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,6 +33,36 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Detect package changes
+        id: changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+
+          if [ "$BEFORE" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            CHANGED_FILES="$(git diff --name-only "$BEFORE" "$AFTER")"
+          else
+            # Fallback for the first push (or when `before` isn't available): inspect the pushed commit.
+            CHANGED_FILES="$(git show --name-only --pretty="" "$AFTER")"
+          fi
+
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -qE '^packages/cli/'; then
+            echo "cli_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cli_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if echo "$CHANGED_FILES" | grep -qE '^packages/vscode-extension/'; then
+            echo "vscode_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "vscode_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Lint
         run: pnpm lint
 
@@ -39,36 +71,53 @@ jobs:
 
       - name: Bump CLI version
         id: bump_cli
+        if: steps.changes.outputs.cli_changed == 'true'
         working-directory: packages/cli
         run: |
           npm version patch --no-git-tag-version
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
-      - name: Publish CLI to npm
-        working-directory: packages/cli
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
-
       - name: Bump VS Code Extension version
         id: bump_vscode
+        if: steps.changes.outputs.vscode_changed == 'true'
         working-directory: packages/vscode-extension
         run: |
           npm version patch --no-git-tag-version
           echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
+      - name: Commit version bumps
+        if: steps.changes.outputs.cli_changed == 'true' || steps.changes.outputs.vscode_changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          MSG="chore(release): bump"
+          if [ "${{ steps.changes.outputs.cli_changed }}" = "true" ]; then
+            git add packages/cli/package.json
+            MSG="$MSG cli@${{ steps.bump_cli.outputs.version }}"
+          fi
+          if [ "${{ steps.changes.outputs.vscode_changed }}" = "true" ]; then
+            git add packages/vscode-extension/package.json
+            MSG="$MSG vscode@${{ steps.bump_vscode.outputs.version }}"
+          fi
+
+          git commit -m "$MSG"
+          git push
+
+      - name: Publish CLI to npm
+        if: steps.changes.outputs.cli_changed == 'true'
+        working-directory: packages/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
       - name: Publish VS Code Extension to Open VSX
+        if: steps.changes.outputs.vscode_changed == 'true'
         working-directory: packages/vscode-extension
         env:
           OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
         run: |
           npm i -g ovsx
           ovsx publish -p "$OVSX_TOKEN"
-
-      - name: Commit version bumps
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/cli/package.json packages/vscode-extension/package.json
-          git commit -m "chore(release): bump cli@${{ steps.bump_cli.outputs.version }} + vscode@${{ steps.bump_vscode.outputs.version }}"
-          git push

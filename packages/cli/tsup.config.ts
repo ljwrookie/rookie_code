@@ -7,6 +7,7 @@ export default defineConfig({
   dts: false,
   sourcemap: true,
   clean: true,
-  outDir: '../../output/rookie-code-dist',
+  // Keep build outputs inside the package so `npm publish` includes them.
+  outDir: 'dist',
   banner: { js: '#!/usr/bin/env node' },
 });
