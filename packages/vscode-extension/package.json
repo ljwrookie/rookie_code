@@ -3,7 +3,7 @@
   "publisher": "rookie",
   "displayName": "Rookie Code (Editor Context)",
   "description": "Exports active file and selection ranges to Rookie Code agent via .rookie-code/editor-context.json",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "license": "MIT",
   "repository": {
