@@ -28,6 +28,11 @@ export const ConfigSchema = z.object({
     confirmHighRiskEdits: z.boolean(),
     maxAutoEditLines: z.number().int().positive('maxAutoEditLines must be a positive integer'),
   }),
+  editorContext: z.object({
+    enabled: z.boolean(),
+    maxSnippetLines: z.number().int().positive(),
+    surroundingLines: z.number().int().nonnegative(),
+  }),
   repoContext: z.object({
     enabled: z.boolean(),
     maxFiles: z.number().int().positive(),

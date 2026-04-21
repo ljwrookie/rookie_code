@@ -1,52 +1,13 @@
 {
-  "name": "rookie-code",
-  "version": "0.1.0",
-  "description": "CLI-based code agent powered by LLM",
+  "name": "rookie-code-monorepo",
+  "private": true,
   "type": "module",
-  "bin": {
-    "rookie-code": "./dist/index.js"
-  },
   "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "start": "node dist/index.js",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "lint": "tsc --noEmit"
-  },
-  "engines": {
-    "node": ">=20.0.0"
-  },
-  "keywords": [
-    "cli",
-    "code-agent",
-    "llm",
-    "ai"
-  ],
-  "license": "MIT",
-  "files": ["dist"],
-  "devDependencies": {
-    "@types/diff": "^8.0.0",
-    "@types/marked-terminal": "^6.1.1",
-    "@types/node": "^25.5.2",
-    "tsup": "^8.5.1",
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.4"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.86.1",
-    "@inquirer/core": "^11.1.8",
-    "@inquirer/prompts": "^8.4.1",
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "chalk": "^5.6.2",
-    "cli-highlight": "^2.1.11",
-    "diff": "^8.0.4",
-    "dotenv": "^17.4.1",
-    "js-tiktoken": "^1.0.21",
-    "marked": "^15.0.0",
-    "marked-terminal": "^7.3.0",
-    "openai": "^6.34.0",
-    "ora": "^9.3.0",
-    "zod": "^4.3.6"
+    "build": "pnpm -r build",
+    "dev:cli": "pnpm --filter rookie-code dev",
+    "start:cli": "node packages/cli/dist/index.js",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r --if-present test",
+    "test:run": "pnpm -r --if-present test:run"
   }
 }

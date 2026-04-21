@@ -50,6 +50,7 @@ export async function startRepl(params: StartReplParams): Promise<void> {
     hookManager,
     depth: 0,
     repoContext: config.repoContext,
+    editorContext: config.editorContext,
   });
 
   // Start REPL with full context

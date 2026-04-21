@@ -92,6 +92,14 @@ export interface Config {
     /** If a single change touches more than this many lines, require confirmation. */
     maxAutoEditLines: number;
   };
+  editorContext: {
+    /** Inject editor state (active file / selection snippet) into the system prompt. */
+    enabled: boolean;
+    /** Max snippet lines to include (after surrounding lines / merging ranges). */
+    maxSnippetLines: number;
+    /** Include N surrounding lines around each selection. */
+    surroundingLines: number;
+  };
   repoContext: {
     /** Inject a lightweight repo overview into system prompt. */
     enabled: boolean;

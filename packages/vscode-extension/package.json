@@ -1,0 +1,73 @@
+{
+  "name": "rookie-code-vscode",
+  "publisher": "rookie",
+  "displayName": "Rookie Code (Editor Context)",
+  "description": "Exports active file and selection ranges to Rookie Code agent via .rookie-code/editor-context.json",
+  "version": "0.0.2",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ljwrookie/rookie_code.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ljwrookie/rookie_code/issues"
+  },
+  "homepage": "https://github.com/ljwrookie/rookie_code#readme",
+  "keywords": [
+    "rookie-code",
+    "ai",
+    "agent",
+    "editor-context"
+  ],
+  "type": "commonjs",
+  "main": "./dist/extension.js",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "*"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "Rookie Code",
+      "properties": {
+        "rookieCode.editorContext.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable exporting active editor file + selections to .rookie-code/editor-context.json"
+        },
+        "rookieCode.editorContext.throttleMs": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "description": "Throttle delay (ms) for updating editor-context.json while you move cursor or selection"
+        },
+        "rookieCode.editorContext.includeCaretLine": {
+          "type": "boolean",
+          "default": false,
+          "description": "When there is no selection, export the caret line as a 1-line selection range"
+        },
+        "rookieCode.editorContext.path": {
+          "type": "string",
+          "default": "",
+          "description": "Optional override output path for editor-context.json. Default: ~/.rookie-code/editor-context.json"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "@types/vscode": "^1.90.0",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.2"
+  }
+}

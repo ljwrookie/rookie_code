@@ -5,6 +5,7 @@ import type { LLMProvider } from '../llm/provider.js';
 import type { ToolExecutionContext } from './base.js';
 import { AgentLoop } from '../agent/loop.js';
 import type { HookManager } from '../hooks/manager.js';
+import type { Config } from '../types.js';
 
 type AgentToolCommonOptions = {
   provider: LLMProvider;
@@ -15,6 +16,7 @@ type AgentToolCommonOptions = {
   maxAgentDepth?: number;
   defaultMaxIterations?: number;
   defaultTokenBudget?: number;
+  editorContext?: Config['editorContext'];
 };
 
 function clampPositiveInt(value: unknown, fallback: number): number {
@@ -123,6 +125,7 @@ export class AgentTool implements Tool {
       depth: childDepth,
       onEvent: (event) => this.options.onEvent?.(event),
       hookManager: this.options.hookManager,
+      editorContext: this.options.editorContext,
     });
 
     const effectiveTask = systemPrompt ? `[System Prompt]\n${systemPrompt}\n\n[Task]\n${task}` : task;
@@ -261,6 +264,7 @@ export class MultiAgentTool implements Tool {
         depth: childDepth,
         onEvent: (event) => this.options.onEvent?.(event),
         hookManager: this.options.hookManager,
+        editorContext: this.options.editorContext,
       });
 
       const effectiveTask = systemPrompt ? `[System Prompt]\n${systemPrompt}\n\n[Task]\n${task}` : task;
@@ -305,4 +309,3 @@ export class MultiAgentTool implements Tool {
     }
   }
 }
-

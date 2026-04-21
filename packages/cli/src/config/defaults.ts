@@ -54,6 +54,11 @@ export const DEFAULT_CONFIG: Config = {
     confirmHighRiskEdits: true,
     maxAutoEditLines: 200,
   },
+  editorContext: {
+    enabled: true,
+    maxSnippetLines: 120,
+    surroundingLines: 2,
+  },
   repoContext: {
     enabled: true,
     maxFiles: 120,

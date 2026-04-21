@@ -6,6 +6,7 @@ import type { LLMProvider } from '../llm/provider.js';
 import type { ToolExecutionContext } from './base.js';
 import { AgentLoop } from '../agent/loop.js';
 import type { HookManager } from '../hooks/manager.js';
+import type { Config } from '../types.js';
 
 type OrchestrateOptions = {
   provider: LLMProvider;
@@ -16,6 +17,7 @@ type OrchestrateOptions = {
   defaultMaxIterations?: number;
   defaultTokenBudget?: number;
   maxParallel?: number;
+  editorContext?: Config['editorContext'];
 };
 
 const PlanSchema = z.object({
@@ -105,6 +107,7 @@ export class OrchestrateTool implements Tool {
         workingDirectory: this.options.workingDirectory,
         depth: childDepth,
         hookManager: this.options.hookManager,
+        editorContext: this.options.editorContext,
       });
 
       const subagentId = `orchestrate_${childDepth}_${id}`;
@@ -204,4 +207,3 @@ function clampInt(value: unknown, fallback: number, min: number, max: number): n
   if (i > max) return max;
   return i;
 }
-

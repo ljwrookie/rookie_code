@@ -1,0 +1,8 @@
+**/.vscode/**
+**/.github/**
+**/node_modules/**
+**/*.map
+src/**
+tsconfig.json
+tsup.config.ts
+pnpm-lock.yaml

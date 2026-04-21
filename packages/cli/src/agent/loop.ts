@@ -10,6 +10,7 @@ import type { Config } from '../types.js';
 import { buildRepoOverview } from '../repo/overview.js';
 import { wrapToolOutputForLLM } from '../security/prompt-injection.js';
 import type { HookManager } from '../hooks/manager.js';
+import { buildEditorContextSection } from '../editor/editor-context.js';
 
 export interface AgentLoopOptions {
   maxIterations: number;
@@ -21,6 +22,7 @@ export interface AgentLoopOptions {
   /** Agent nesting depth. Top-level agent = 0. */
   depth?: number;
   repoContext?: Config['repoContext'];
+  editorContext?: Config['editorContext'];
 }
 
 /**
@@ -31,6 +33,7 @@ export interface AgentLoopOptions {
  */
 export class AgentLoop {
   private cachedRepoSection: string | null = null;
+  private runEditorSection: string | null = null;
 
   constructor(
     private provider: LLMProvider,
@@ -69,6 +72,12 @@ export class AgentLoop {
     if (this.options.hookManager) {
       await this.options.hookManager.emitUserPromptSubmit(userMessage);
     }
+
+    // Refresh editor context once per top-level run (avoid re-reading per iteration).
+    // This gives the LLM awareness of the current focused file / selection, similar to IDE agents.
+    this.runEditorSection = this.options.editorContext
+      ? buildEditorContextSection({ workingDirectory: this.options.workingDirectory, config: this.options.editorContext })
+      : null;
 
     const messages: Message[] = [
       ...history,
@@ -322,6 +331,7 @@ export class AgentLoop {
       workingDirectory: this.options.workingDirectory,
       availableTools: this.tools.getNames(),
       memorySection,
+      editorSection: this.runEditorSection,
       repoSection,
     });
 

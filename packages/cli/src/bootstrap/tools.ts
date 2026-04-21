@@ -15,6 +15,9 @@ import { OrchestrateTool } from '../tools/orchestrate.js';
 import { McpManager } from '../mcp/manager.js';
 import { TerminalUI } from '../cli/terminal-ui.js';
 import type { REPL } from '../cli/repl.js';
+import path from 'node:path';
+import { getPrimaryEditorContextPath, loadEditorContext } from '../editor/editor-context.js';
+import fs from 'node:fs';
 
 export interface BuildToolRegistryParams {
   config: Config;
@@ -59,6 +62,39 @@ export async function buildToolRegistry(params: BuildToolRegistryParams): Promis
     },
   );
   ui.setWelcomeInfo({ provider: config.llm.provider, model: config.llm.model });
+  let cachedHint: string | null = null;
+  const computeHint = (): string | null => {
+    const ctx = loadEditorContext(workingDir);
+    if (!ctx?.activeFile) return null;
+    const activeAbs = ctx.activeFile;
+    const rel = path.isAbsolute(activeAbs) ? path.relative(workingDir, activeAbs) : activeAbs;
+    const sels = ctx.selections ?? [];
+    if (sels.length === 0) return `In ${rel}`;
+    const first = sels[0]!;
+    const single = sels.length === 1 && first.startLine === first.endLine;
+    const range = single ? `L${first.startLine}` : `L${first.startLine}-L${first.endLine}`;
+    const extra = sels.length > 1 ? ` (+${sels.length - 1})` : '';
+    return `In ${rel}  ${range}${extra}`;
+  };
+  const refreshHint = (): void => {
+    cachedHint = computeHint();
+    ui.invalidate();
+  };
+  ui.setBottomHintProvider(() => cachedHint);
+  refreshHint();
+
+  // Refresh hint immediately when the editor context file changes.
+  const ctxFile = getPrimaryEditorContextPath(workingDir);
+  try {
+    // Watch directory so it also works when the file is created later.
+    const dir = path.dirname(ctxFile);
+    const base = path.basename(ctxFile);
+    fs.watch(dir, { persistent: false }, (_evt, filename) => {
+      if (!filename || filename === base) refreshHint();
+    });
+  } catch {
+    // Ignore if the file doesn't exist yet; the hint will appear once created and UI rerenders.
+  }
 
   // Register basic tools
   const tools = new ToolRegistry();
@@ -106,6 +142,7 @@ export async function buildToolRegistry(params: BuildToolRegistryParams): Promis
       }
     },
     maxAgentDepth,
+    editorContext: config.editorContext,
   }));
   tools.register(new MultiAgentTool({
     provider,
@@ -121,6 +158,7 @@ export async function buildToolRegistry(params: BuildToolRegistryParams): Promis
     },
     maxAgentDepth,
     maxParallelAgents,
+    editorContext: config.editorContext,
   }));
   tools.register(new OrchestrateTool({
     provider,
@@ -131,6 +169,7 @@ export async function buildToolRegistry(params: BuildToolRegistryParams): Promis
     defaultMaxIterations: 15,
     defaultTokenBudget: 40_000,
     maxParallel: maxParallelAgents,
+    editorContext: config.editorContext,
   }));
 
   return { tools, mcpManager, ui, setRepl };

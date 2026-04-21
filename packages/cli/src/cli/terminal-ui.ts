@@ -41,6 +41,7 @@ export class TerminalUI {
   private streamText = '';
   private pendingInputs: string[] = [];
   private activeInput: string | null = null;
+  private bottomHintProvider: (() => string | null) | null = null;
 
   private welcome: { provider?: string; model?: string } = {};
   private inputValue = '';
@@ -78,6 +79,16 @@ export class TerminalUI {
     this.activeCompletionIdx = 0;
     this.completionScroll = 0;
     this.lastCompletionKey = '';
+    this.scheduleRender();
+  }
+
+  setBottomHintProvider(provider: (() => string | null) | null): void {
+    this.bottomHintProvider = provider;
+    this.scheduleRender();
+  }
+
+  /** Force a re-render (e.g. when external state changes). */
+  invalidate(): void {
     this.scheduleRender();
   }
 
@@ -509,7 +520,11 @@ export class TerminalUI {
     const box = this.renderInputBox(boxWidth);
     const boxLines = box.length;
 
-    const reserved = headerHeight + boxLines + footerLines + completionLines + pendingLines;
+    const hintRaw = this.bottomHintProvider?.() ?? null;
+    const hintLine = hintRaw ? sliceByColumns(hintRaw, 0, printCols) : null;
+    const hintLines = hintLine ? 1 : 0;
+
+    const reserved = headerHeight + boxLines + hintLines + footerLines + completionLines + pendingLines;
     const outHeight = Math.max(3, rows - reserved);
 
     const stats = this.statsProvider();
@@ -534,6 +549,7 @@ export class TerminalUI {
     for (const l of pendingView) screen.push(padToCols(l, printCols));
     for (const l of completionView) screen.push(padToCols(l, printCols));
     for (const l of box) screen.push(padToCols(l, printCols));
+    if (hintLine) screen.push(padToCols(chalk.hex('#f59e0b')(hintLine), printCols));
     screen.push(padToCols(footer1, printCols));
     screen.push(padToCols(footer2, printCols));
     // Ensure we always fill the terminal height so cursor math stays stable.
@@ -545,7 +561,7 @@ export class TerminalUI {
     process.stdout.write(screen.join('\n'));
 
     // Place cursor inside the input box content line.
-    const cursorPos = this.getCursorPositionInBox(printCols, rows, boxWidth, completionLines, boxLines);
+    const cursorPos = this.getCursorPositionInBox(printCols, rows, boxWidth, completionLines, boxLines, hintLines);
     process.stdout.write(`\x1b[${cursorPos.row};${cursorPos.col}H`);
     process.stdout.write(ANSI.showCursor);
   }
@@ -662,11 +678,18 @@ export class TerminalUI {
     if (this.completionScroll > maxScroll) this.completionScroll = maxScroll;
   }
 
-  private getCursorPositionInBox(cols: number, rows: number, boxWidth: number, completionLines: number, boxLines: number): { row: number; col: number } {
+  private getCursorPositionInBox(
+    cols: number,
+    rows: number,
+    boxWidth: number,
+    completionLines: number,
+    boxLines: number,
+    hintLines: number,
+  ): { row: number; col: number } {
     // Anchor cursor from the bottom so it stays correct even if some terminals wrap lines unexpectedly.
     const footerLines = 2;
     const inputLayout = this.buildInputLayout(Math.max(20, boxWidth) - 2, '> ', 6);
-    const row = rows - footerLines - boxLines - completionLines + 1 + inputLayout.cursorRow;
+    const row = rows - footerLines - boxLines - hintLines - completionLines + 1 + inputLayout.cursorRow;
     const col = 2 + inputLayout.cursorCol;
     return { row, col: Math.min(col, cols) };
   }
